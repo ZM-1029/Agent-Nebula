@@ -1,0 +1,158 @@
+export const sessionsSeries = [
+  { day: "Mon", sessions: 42, resolved: 36 },
+  { day: "Tue", sessions: 58, resolved: 49 },
+  { day: "Wed", sessions: 71, resolved: 60 },
+  { day: "Thu", sessions: 64, resolved: 55 },
+  { day: "Fri", sessions: 89, resolved: 74 },
+  { day: "Sat", sessions: 55, resolved: 48 },
+  { day: "Sun", sessions: 47, resolved: 41 },
+];
+
+export const channels = [
+  { name: "Web Chat", value: 412, color: "var(--primary)" },
+  { name: "Email", value: 287, color: "var(--accent-blue)" },
+  { name: "WhatsApp", value: 168, color: "var(--accent-amber)" },
+  { name: "Voice", value: 94, color: "var(--accent-violet)" },
+  { name: "Social", value: 61, color: "var(--accent-rose)" },
+];
+
+export const responseTimeBars = [
+  { hour: "9a", avg: 42 },
+  { hour: "10a", avg: 38 },
+  { hour: "11a", avg: 51 },
+  { hour: "12p", avg: 64 },
+  { hour: "1p", avg: 58 },
+  { hour: "2p", avg: 47 },
+  { hour: "3p", avg: 39 },
+  { hour: "4p", avg: 44 },
+  { hour: "5p", avg: 52 },
+];
+
+export const revenueSeries = [
+  { m: "Jan", mrr: 24 }, { m: "Feb", mrr: 31 }, { m: "Mar", mrr: 28 },
+  { m: "Apr", mrr: 42 }, { m: "May", mrr: 51 }, { m: "Jun", mrr: 58 },
+  { m: "Jul", mrr: 67 }, { m: "Aug", mrr: 73 }, { m: "Sep", mrr: 82 },
+  { m: "Oct", mrr: 91 }, { m: "Nov", mrr: 102 }, { m: "Dec", mrr: 118 },
+];
+
+export const agents = [
+  { id: "a1", name: "John Doe", role: "Senior Agent", status: "online", chats: 14, csat: 98, avatar: "JD", shift: "Morning" },
+  { id: "a2", name: "Diego Alvarez", role: "Agent", status: "online", chats: 11, csat: 94, avatar: "DA", shift: "Morning" },
+  { id: "a3", name: "Priya Patel", role: "Support Manager", status: "online", chats: 8, csat: 96, avatar: "PP", shift: "Day" },
+  { id: "a4", name: "Liam O'Connor", role: "Agent", status: "busy", chats: 17, csat: 91, avatar: "LO", shift: "Evening" },
+  { id: "a5", name: "Sofia Rossi", role: "Agent", status: "away", chats: 6, csat: 93, avatar: "SR", shift: "Day" },
+  { id: "a6", name: "Noah Kim", role: "Analyst", status: "online", chats: 0, csat: 0, avatar: "NK", shift: "Day" },
+  { id: "a7", name: "Aisha Nasser", role: "Agent", status: "offline", chats: 0, csat: 95, avatar: "AN", shift: "Night" },
+  { id: "a8", name: "Felix Wagner", role: "Agent", status: "online", chats: 9, csat: 97, avatar: "FW", shift: "Evening" },
+];
+
+export const customers = [
+  { id: "c1", name: "Acme Robotics", contact: "Eva Brooks", email: "eva@acme.io", plan: "Enterprise", mrr: 4800, tickets: 12, status: "active", joined: "2023-04-12" },
+  { id: "c2", name: "Pinecone Labs", contact: "Marcus Field", email: "marcus@pinecone.dev", plan: "Pro", mrr: 480, tickets: 4, status: "active", joined: "2024-01-09" },
+  { id: "c3", name: "Lumen Studio", contact: "Hana Park", email: "hana@lumen.cc", plan: "Pro", mrr: 480, tickets: 7, status: "trial", joined: "2025-09-20" },
+  { id: "c4", name: "Northwind", contact: "Toby Klein", email: "toby@northwind.io", plan: "Starter", mrr: 99, tickets: 2, status: "active", joined: "2024-11-02" },
+  { id: "c5", name: "Vega Capital", contact: "Renee Cho", email: "renee@vegacap.fi", plan: "Enterprise", mrr: 7200, tickets: 19, status: "active", joined: "2022-06-30" },
+  { id: "c6", name: "Mosaic Mobile", contact: "Theo Adler", email: "theo@mosaicmobile.app", plan: "Pro", mrr: 480, tickets: 5, status: "churned", joined: "2023-12-15" },
+];
+
+export const tickets = [
+  { id: "TK-4821", subject: "Payment failed on annual plan upgrade", customer: "Acme Robotics", agent: "John Doe", priority: "high", status: "in_progress", sla: 72, channel: "Email", updated: "2m ago" },
+  { id: "TK-4820", subject: "API rate limit confusion", customer: "Pinecone Labs", agent: "Diego Alvarez", priority: "medium", status: "open", sla: 91, channel: "Web Chat", updated: "8m ago" },
+  { id: "TK-4819", subject: "SSO login loop after SAML update", customer: "Vega Capital", agent: "Priya Patel", priority: "urgent", status: "escalated", sla: 31, channel: "Email", updated: "12m ago" },
+  { id: "TK-4818", subject: "Export to CSV missing columns", customer: "Lumen Studio", agent: "Liam O'Connor", priority: "low", status: "pending", sla: 86, channel: "Web Chat", updated: "1h ago" },
+  { id: "TK-4817", subject: "Dark mode renders wrong on Safari", customer: "Mosaic Mobile", agent: "Sofia Rossi", priority: "medium", status: "open", sla: 78, channel: "Web Chat", updated: "2h ago" },
+  { id: "TK-4816", subject: "Need invoice in EUR with VAT", customer: "Northwind", agent: "Felix Wagner", priority: "low", status: "resolved", sla: 100, channel: "Email", updated: "3h ago" },
+  { id: "TK-4815", subject: "Webhook deliveries dropping intermittently", customer: "Acme Robotics", agent: "John Doe", priority: "high", status: "in_progress", sla: 58, channel: "Email", updated: "4h ago" },
+  { id: "TK-4814", subject: "Onboarding flow stuck at step 3", customer: "Pinecone Labs", agent: "Diego Alvarez", priority: "medium", status: "closed", sla: 100, channel: "Web Chat", updated: "yesterday" },
+];
+
+export const conversations = [
+  { id: "ch1", customer: "Eva Brooks", company: "Acme Robotics", preview: "Hey — the upgrade went through but we still see the old plan…", unread: 2, ts: "2m", channel: "web", tag: "billing", state: "active", agent: { name: "John Doe", avatar: "JD", load: 3, avgResponse: "42s" }, durationSec: 452, sentiment: "watch" },
+  { id: "ch2", customer: "Marcus Field", company: "Pinecone Labs", preview: "Quick question about the rate limit headers", unread: 0, ts: "8m", channel: "web", tag: "api", state: "active", agent: { name: "Diego Alvarez", avatar: "DA", load: 2, avgResponse: "38s" }, durationSec: 184, sentiment: "calm" },
+  { id: "ch3", customer: "Hana Park", company: "Lumen Studio", preview: "Can you re-run the export for last month?", unread: 1, ts: "14m", channel: "whatsapp", tag: "export", state: "waiting", agent: { name: "Liam O'Connor", avatar: "LO", load: 4, avgResponse: "1m 12s" }, durationSec: 845, sentiment: "calm" },
+  { id: "ch4", customer: "Renee Cho", company: "Vega Capital", preview: "SSO is back up, thanks for the quick turnaround!", unread: 0, ts: "1h", channel: "in-app", tag: "auth", state: "active", agent: { name: "Priya Patel", avatar: "PP", load: 1, avgResponse: "29s" }, durationSec: 3580, sentiment: "calm" },
+  { id: "ch5", customer: "Toby Klein", company: "Northwind", preview: "Invoice received — appreciate it.", unread: 0, ts: "3h", channel: "whatsapp", tag: "billing", state: "active", agent: { name: "Felix Wagner", avatar: "FW", load: 2, avgResponse: "51s" }, durationSec: 612, sentiment: "calm" },
+  { id: "ch6", customer: "Theo Adler", company: "Mosaic Mobile", preview: "Escalating: pricing dispute on annual contract", unread: 3, ts: "5h", channel: "web", tag: "billing", state: "escalated", agent: { name: "Sofia Rossi", avatar: "SR", load: 5, avgResponse: "2m 04s" }, durationSec: 1284, sentiment: "escalated" },
+];
+
+export const whispers: Record<string, { id: number; from: string; text: string; ts: string }[]> = {
+  ch1: [{ id: 1, from: "You", text: "Offer the annual discount if she pushes back on price.", ts: "10:44" }],
+  ch6: [
+    { id: 1, from: "You", text: "Stay calm — pull up the contract notes from Aug 14.", ts: "10:46" },
+    { id: 2, from: "You", text: "Loop me in if he asks for a manager.", ts: "10:48" },
+  ],
+};
+
+export const supervisorActivity: Record<string, { id: number; type: "viewing" | "whisper" | "barge" | "flag"; text: string; ts: string }[]> = {
+  ch1: [
+    { id: 1, type: "viewing", text: "You started viewing this session", ts: "10:43" },
+    { id: 2, type: "whisper", text: "Whisper sent to John Doe", ts: "10:44" },
+  ],
+  ch6: [
+    { id: 1, type: "viewing", text: "You started viewing this session", ts: "10:45" },
+    { id: 2, type: "whisper", text: "Whisper sent to Sofia Rossi", ts: "10:46" },
+    { id: 3, type: "flag", text: "Session flagged for review", ts: "10:47" },
+  ],
+};
+
+export const messageThread = [
+  { id: 1, from: "customer", text: "Hey — the upgrade went through but we still see the old plan in the workspace.", ts: "10:42" },
+  { id: 2, from: "agent", text: "Hi Eva! Let me pull up your account real quick.", ts: "10:43" },
+  { id: 3, from: "customer", text: "Thanks — also got a charge confirmation by email, so the payment definitely went through.", ts: "10:44" },
+  { id: 4, from: "agent", text: "Confirmed on our end. I'm syncing the plan status now — should propagate in under a minute.", ts: "10:45" },
+  { id: 5, from: "customer", text: "Perfect, the plan badge just refreshed. 🙌", ts: "10:47" },
+];
+
+export const aiSuggestions = [
+  "Thanks for confirming! Glad it cleared up.",
+  "Anything else I can sort out while we have your billing context open?",
+  "I'll drop a note on your account so any teammate sees the upgrade context.",
+];
+
+export const cannedReplies = [
+  { id: "r1", title: "Greeting", body: "Hi there 👋 thanks for reaching out — happy to help." },
+  { id: "r2", title: "Looking into it", body: "Let me dig into this and get back to you in just a moment." },
+  { id: "r3", title: "Refund processed", body: "Your refund has been processed — expect it to land in 3–5 business days." },
+];
+
+export const notifications = [
+  { id: "n1", title: "SLA breach risk", body: "TK-4819 is approaching 90% SLA elapsed", tone: "warning", ts: "just now" },
+  { id: "n2", title: "New escalation", body: "Theo Adler escalated TK-4822", tone: "destructive", ts: "4m" },
+  { id: "n3", title: "Agent online", body: "Aisha Nasser is now available", tone: "primary", ts: "12m" },
+  { id: "n4", title: "Daily report ready", body: "Yesterday's CSAT closed at 96%", tone: "primary", ts: "1h" },
+  { id: "n5", title: "AI suggestion accepted", body: "John used a smart reply on TK-4815", tone: "blue", ts: "2h" },
+];
+
+export const activity = [
+  { id: 1, who: "John Doe", what: "resolved", target: "TK-4816", ts: "2m" },
+  { id: 2, who: "Diego Alvarez", what: "assigned", target: "TK-4820", ts: "9m" },
+  { id: 3, who: "AI Assistant", what: "categorized", target: "TK-4823 as Billing", ts: "14m" },
+  { id: 4, who: "Priya Patel", what: "escalated", target: "TK-4819", ts: "22m" },
+  { id: 5, who: "Felix Wagner", what: "replied to", target: "Lumen Studio", ts: "31m" },
+  { id: 6, who: "System", what: "synced 142 contacts from", target: "HubSpot", ts: "1h" },
+];
+
+export const sentimentMix = [
+  { label: "Positive", value: 72, color: "var(--primary)" },
+  { label: "Neutral", value: 21, color: "var(--accent-blue)" },
+  { label: "Negative", value: 7, color: "var(--accent-rose)" },
+];
+
+export const roles = [
+  { id: "super", name: "Super Admin", color: "primary", count: 2, desc: "Unrestricted access across the workspace." },
+  { id: "mgr", name: "Support Manager", color: "blue", count: 5, desc: "Manage agents, tickets, escalations, reports." },
+  { id: "agent", name: "Agent", color: "amber", count: 28, desc: "Handle chats, tickets, customer notes." },
+  { id: "analyst", name: "Analyst", color: "violet", count: 4, desc: "Read-only access to analytics and exports." },
+  { id: "viewer", name: "Viewer", color: "rose", count: 9, desc: "Dashboard read-only, no actions." },
+];
+
+export const permissionMatrix = [
+  { feature: "View dashboard", super: true, mgr: true, agent: true, analyst: true, viewer: true },
+  { feature: "Reply to chats", super: true, mgr: true, agent: true, analyst: false, viewer: false },
+  { feature: "Assign tickets", super: true, mgr: true, agent: true, analyst: false, viewer: false },
+  { feature: "Escalate / reopen", super: true, mgr: true, agent: false, analyst: false, viewer: false },
+  { feature: "Manage agents", super: true, mgr: true, agent: false, analyst: false, viewer: false },
+  { feature: "Edit AI settings", super: true, mgr: false, agent: false, analyst: false, viewer: false },
+  { feature: "Billing & API keys", super: true, mgr: false, agent: false, analyst: false, viewer: false },
+  { feature: "Export reports", super: true, mgr: true, agent: false, analyst: true, viewer: false },
+];

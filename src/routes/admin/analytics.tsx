@@ -7,7 +7,7 @@ import {
   Area, AreaChart, Bar, BarChart, CartesianGrid,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
-import { Download, FileSpreadsheet, FileText, Calendar, Users, CheckCircle2, XCircle, PackageSearch, FileQuestion } from "lucide-react";
+import { Download, FileText, Calendar, Users, CheckCircle2, XCircle, PackageSearch, FileQuestion } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/services/api";
 import { cn } from "@/lib/utils";
@@ -55,6 +55,26 @@ function AnalyticsPage() {
     retry: 1,
     enabled: !!activeDate,
   });
+
+  function exportCSV() {
+    const headers = ["Date", "Interactions", "Orders Tracked", "Confirmed", "Declined", "OTP Sent", "Success Rate"];
+    const rows = history.map((d) => [
+      d.date, d.totalRequests, d.trackLookups, d.confirmations, d.declines, d.otpSent, d.successRate + "%",
+    ]);
+    const csv = [headers, ...rows].map((r) => r.join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `analytics-${activeDate}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("CSV downloaded");
+  }
+
+  function exportPDF() {
+    window.print();
+  }
 
   // 14-day trend for area chart
   const trendData = history.map((d) => ({
@@ -106,21 +126,11 @@ function AnalyticsPage() {
               ))}
             </select>
           </div>
-          <Button variant="outline" size="sm" onClick={() => toast.success("CSV exported")}>
+          <Button variant="outline" size="sm" onClick={exportCSV}>
             <Download className="mr-1.5 h-3.5 w-3.5" /> CSV
           </Button>
-          <Button variant="outline" size="sm" onClick={() => toast.success("PDF exported")}>
+          <Button variant="outline" size="sm" onClick={exportPDF}>
             <FileText className="mr-1.5 h-3.5 w-3.5" /> PDF
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              window.open(`/api/report/excel?date=${activeDate}`, "_blank");
-              toast.success("Excel report opened");
-            }}
-          >
-            <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5" /> Excel
           </Button>
         </div>
       </div>

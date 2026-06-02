@@ -1,8 +1,9 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { GlassCard } from "@/components/admin/glass-card";
 import { Button } from "@/components/ui/button";
-import { agents, conversations, tickets, activity, sessionsSeries } from "@/lib/admin-mock/data";
-import { ArrowLeft, MessageSquare, Edit, UserCog, Flag, Mail, Phone } from "lucide-react";
+import { agentsService } from "@/services/agentsService";
+import { ticketsService } from "@/services/ticketsService";
+import { ArrowLeft, MessageSquare, UserCog, Flag, Mail, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Table,
@@ -12,22 +13,22 @@ import {
   TableHead,
   TableCell,
 } from "@/components/ui/table";
-import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
+import { useQuery } from "@tanstack/react-query";
 
 export const Route = createFileRoute("/admin/agents/$agentId")({
-  head: ({ params }) => {
-    const a = agents.find((x) => x.id === params.agentId);
-    return {
-      meta: [
-        { title: a ? `${a.name} — Agent` : "Agent — Helix" },
-        { name: "description", content: "Agent profile, workload and recent activity." },
-      ],
-    };
-  },
-  loader: ({ params }) => {
-    const agent = agents.find((a) => a.id === params.agentId);
-    if (!agent) throw notFound();
-    return { agent };
+  head: ({ params }) => ({
+    meta: [
+      { title: `Agent ${params.agentId} — Helix` },
+      { name: "description", content: "Agent profile, workload and recent activity." },
+    ],
+  }),
+  loader: async ({ params }) => {
+    try {
+      const agent = await agentsService.getById(params.agentId);
+      return { agent };
+    } catch {
+      throw notFound();
+    }
   },
   notFoundComponent: () => (
     <div className="space-y-3">
@@ -63,18 +64,33 @@ const priorityTone: Record<string, string> = {
 };
 
 function AgentDetailPage() {
-  const { agent } = Route.useLoaderData();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { agent } = (Route.useLoaderData() ?? {}) as any;
+  const statusKey = (agent?.status ?? "offline").toLowerCase();
 
-  const agentConvos = conversations.filter((c) => c.agent.name === agent.name);
-  const agentTickets = tickets.filter((t) => t.agent === agent.name);
-  const agentActivity = activity.filter((a) => a.who === agent.name);
-  const resolvedToday = agentTickets.filter((t) => t.status === "resolved").length;
-  const avgResponse = agentConvos[0]?.agent.avgResponse ?? "—";
-  
+  const { data: tickets = [], isLoading: ticketsLoading } = useQuery({
+    queryKey: ["tickets", "agent", agent?.id],
+    queryFn: () => ticketsService.getAll({ agentId: agent.id }),
+    enabled: !!agent?.id,
+    retry: 1,
+    refetchInterval: 60_000,
+  });
+
+  if (!agent) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  const openTickets = tickets.filter(
+    (t) => !["resolved", "closed"].includes(t.status.toLowerCase()),
+  ).length;
 
   return (
     <div className="space-y-4">
-      {/* Header */}
+      {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Link to="/admin/agents" className="hover:text-foreground inline-flex items-center gap-1">
           <ArrowLeft className="h-3.5 w-3.5" /> Agents
@@ -83,16 +99,30 @@ function AgentDetailPage() {
         <span className="text-foreground">{agent.name}</span>
       </div>
 
+      {/* Profile card */}
       <GlassCard>
         <div className="flex flex-wrap items-start gap-4">
           <div className="relative">
-            <span className="flex h-16 w-16 items-center justify-center rounded-2xl gradient-primary text-base font-semibold text-primary-foreground">
-              {agent.avatar}
-            </span>
+            {agent.avatarUrl ? (
+              <img
+                src={agent.avatarUrl}
+                alt={agent.name}
+                className="h-16 w-16 rounded-2xl object-cover ring-2 ring-white shadow"
+              />
+            ) : (
+              <span className="flex h-16 w-16 items-center justify-center rounded-2xl gradient-primary text-base font-semibold text-primary-foreground">
+                {agent.name
+                  .split(" ")
+                  .map((w: string) => w[0])
+                  .slice(0, 2)
+                  .join("")
+                  .toUpperCase()}
+              </span>
+            )}
             <span
               className={cn(
                 "absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full ring-2 ring-card",
-                statusDot[agent.status],
+                statusDot[statusKey] ?? "bg-muted-foreground",
               )}
             />
           </div>
@@ -102,22 +132,17 @@ function AgentDetailPage() {
               <span
                 className={cn(
                   "rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize",
-                  statusPill[agent.status],
+                  statusPill[statusKey] ?? "bg-muted text-muted-foreground",
                 )}
               >
-                {agent.status}
+                {statusKey}
               </span>
             </div>
-            <p className="text-sm text-muted-foreground">
-              {agent.role} • {agent.shift} shift
-            </p>
+            <p className="text-sm text-muted-foreground">{agent.role}</p>
             <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1">
                 <Mail className="h-3.5 w-3.5" />
-                {agent.name.toLowerCase().replace(/[^a-z]/g, ".")}@helix.io
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <Phone className="h-3.5 w-3.5" /> +1 (555) 0{agent.id.replace(/\D/g, "")}-2847
+                {agent.email}
               </span>
             </div>
           </div>
@@ -127,9 +152,6 @@ function AgentDetailPage() {
             </Button>
             <Button variant="outline" size="sm">
               <UserCog className="h-4 w-4" /> Reassign
-            </Button>
-            <Button variant="outline" size="sm">
-              <Edit className="h-4 w-4" /> Edit
             </Button>
             <Button variant="outline" size="sm" className="text-destructive">
               <Flag className="h-4 w-4" /> Flag
@@ -141,137 +163,99 @@ function AgentDetailPage() {
       {/* KPIs */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {[
-          { label: "Active Chats", value: agent.chats },
-          { label: "CSAT", value: agent.csat ? `${agent.csat}%` : "—" },
-          { label: "Avg Response", value: avgResponse },
-          { label: "Resolved Today", value: resolvedToday },
+          { label: "Status", value: statusKey },
+          { label: "Role", value: agent.role },
+          { label: "Active Chats", value: agent.activeChats ?? "—" },
+          { label: "Open Tickets", value: ticketsLoading ? "…" : openTickets },
         ].map((k) => (
           <GlassCard key={k.label} className="p-4">
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{k.label}</p>
-            <p className="mt-1 text-2xl font-semibold">{k.value}</p>
+            <p className="mt-1 text-2xl font-semibold capitalize">{k.value}</p>
           </GlassCard>
         ))}
       </div>
 
-      {/* Body */}
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2 space-y-4">
-          <GlassCard>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold">Active Conversations</h2>
-              <span className="text-xs text-muted-foreground">{agentConvos.length}</span>
-            </div>
-            {agentConvos.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-6 text-center">No active conversations.</p>
+      {/* Tickets table */}
+      <GlassCard className="p-0 overflow-hidden">
+        <div className="p-4 pb-3">
+          <h2 className="text-sm font-semibold">Assigned Tickets</h2>
+        </div>
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent border-border/40">
+              <TableHead className="pl-4">ID</TableHead>
+              <TableHead>Subject</TableHead>
+              <TableHead>Priority</TableHead>
+              <TableHead className="pr-4">Status</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {ticketsLoading ? (
+              <TableRow>
+                <TableCell colSpan={4} className="py-8 text-center">
+                  <Loader2 className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
+                </TableCell>
+              </TableRow>
+            ) : tickets.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">
+                  No tickets assigned.
+                </TableCell>
+              </TableRow>
             ) : (
-              <div className="space-y-2">
-                {agentConvos.map((c) => (
-                  <Link
-                    key={c.id}
-                    to="/admin/chats"
-                    className="flex items-center gap-3 rounded-xl bg-background/40 p-3 hover:bg-background/60 transition"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{c.customer} <span className="text-muted-foreground font-normal">• {c.company}</span></p>
-                      <p className="text-xs text-muted-foreground truncate">{c.preview}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[10px] uppercase text-muted-foreground">{c.channel}</p>
-                      <p className="text-xs">{c.ts}</p>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </GlassCard>
-
-          <GlassCard className="p-0 overflow-hidden">
-            <div className="p-4 pb-3">
-              <h2 className="text-sm font-semibold">Recent Tickets</h2>
-            </div>
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent border-border/40">
-                  <TableHead className="pl-4">ID</TableHead>
-                  <TableHead>Subject</TableHead>
-                  <TableHead>Priority</TableHead>
-                  <TableHead className="pr-4">Status</TableHead>
+              tickets.map((t) => (
+                <TableRow key={t.id} className="border-border/40">
+                  <TableCell className="pl-4 font-mono text-xs">{t.reference}</TableCell>
+                  <TableCell className="max-w-[280px] truncate">{t.subject}</TableCell>
+                  <TableCell>
+                    <span
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize",
+                        priorityTone[t.priority.toLowerCase()] ?? "bg-muted text-muted-foreground",
+                      )}
+                    >
+                      {t.priority}
+                    </span>
+                  </TableCell>
+                  <TableCell className="pr-4 text-xs capitalize text-muted-foreground">
+                    {t.status.replace("_", " ")}
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {agentTickets.map((t) => (
-                  <TableRow key={t.id} className="border-border/40">
-                    <TableCell className="pl-4 font-mono text-xs">{t.id}</TableCell>
-                    <TableCell className="max-w-[280px] truncate">{t.subject}</TableCell>
-                    <TableCell>
-                      <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize", priorityTone[t.priority])}>{t.priority}</span>
-                    </TableCell>
-                    <TableCell className="pr-4 text-xs capitalize text-muted-foreground">{t.status.replace("_", " ")}</TableCell>
-                  </TableRow>
-                ))}
-                {agentTickets.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">
-                      No tickets assigned.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </GlassCard>
-        </div>
-
-        <div className="space-y-4">
-          <GlassCard>
-            <h2 className="text-sm font-semibold mb-3">Weekly Performance</h2>
-            <div className="h-32">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={sessionsSeries}>
-                  <defs>
-                    <linearGradient id="agentPerf" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.4} />
-                      <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="day" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <Tooltip
-                    contentStyle={{
-                      background: "var(--card)",
-                      border: "1px solid var(--border)",
-                      borderRadius: 8,
-                      fontSize: 12,
-                    }}
-                  />
-                  <Area type="monotone" dataKey="resolved" stroke="var(--primary)" fill="url(#agentPerf)" strokeWidth={2} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </GlassCard>
-
-          <GlassCard>
-            <h2 className="text-sm font-semibold mb-3">Recent Activity</h2>
-            {agentActivity.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">No recent activity.</p>
-            ) : (
-              <ul className="space-y-2">
-                {agentActivity.map((a) => (
-                  <li key={a.id} className="flex items-start gap-2 text-xs">
-                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-primary shrink-0" />
-                    <div className="flex-1">
-                      <p>
-                        <span className="font-medium">{a.who}</span>{" "}
-                        <span className="text-muted-foreground">{a.what}</span>{" "}
-                        <span className="font-medium">{a.target}</span>
-                      </p>
-                      <p className="text-muted-foreground">{a.ts} ago</p>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              ))
             )}
-          </GlassCard>
-        </div>
-      </div>
+          </TableBody>
+        </Table>
+      </GlassCard>
+
+      {/* Agent info */}
+      <GlassCard>
+        <h2 className="text-sm font-semibold mb-3">Agent Details</h2>
+        <dl className="grid gap-x-8 gap-y-2 text-xs sm:grid-cols-2">
+          <div className="flex justify-between border-b border-dashed border-foreground/10 py-2">
+            <dt className="text-muted-foreground">Agent ID</dt>
+            <dd className="font-mono">{agent.id.slice(0, 8).toUpperCase()}</dd>
+          </div>
+          <div className="flex justify-between border-b border-dashed border-foreground/10 py-2">
+            <dt className="text-muted-foreground">Email</dt>
+            <dd>{agent.email}</dd>
+          </div>
+          <div className="flex justify-between border-b border-dashed border-foreground/10 py-2">
+            <dt className="text-muted-foreground">Role</dt>
+            <dd className="font-semibold">{agent.role}</dd>
+          </div>
+          <div className="flex justify-between border-b border-dashed border-foreground/10 py-2">
+            <dt className="text-muted-foreground">Last seen</dt>
+            <dd>
+              {agent.lastSeenAt
+                ? new Date(agent.lastSeenAt).toLocaleString([], {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })
+                : "—"}
+            </dd>
+          </div>
+        </dl>
+      </GlassCard>
     </div>
   );
 }

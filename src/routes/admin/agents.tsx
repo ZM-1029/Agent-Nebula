@@ -1,6 +1,7 @@
 import { createFileRoute, Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { GlassCard } from "@/components/admin/glass-card";
-import { agents } from "@/lib/admin-mock/data";
+import { agentsService, type Agent } from "@/services/agentsService";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +14,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Plus, Search, ChevronRight, MessageSquare, Upload, RefreshCw, Eye, EyeOff } from "lucide-react";
+import {
+  Plus,
+  Search,
+  ChevronRight,
+  MessageSquare,
+  Upload,
+  RefreshCw,
+  Eye,
+  EyeOff,
+  Loader2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
@@ -41,6 +52,10 @@ const statusDot: Record<string, string> = {
   busy: "bg-warning",
   away: "bg-accent-amber",
   offline: "bg-muted-foreground",
+  Online: "bg-primary",
+  Busy: "bg-warning",
+  Away: "bg-accent-amber",
+  Offline: "bg-muted-foreground",
 };
 
 const statusPill: Record<string, string> = {
@@ -48,6 +63,10 @@ const statusPill: Record<string, string> = {
   busy: "bg-warning/15 text-warning",
   away: "bg-accent-amber/15 text-accent-amber",
   offline: "bg-muted text-muted-foreground",
+  Online: "bg-primary/15 text-primary",
+  Busy: "bg-warning/15 text-warning",
+  Away: "bg-accent-amber/15 text-accent-amber",
+  Offline: "bg-muted text-muted-foreground",
 };
 
 function AgentsPage() {
@@ -57,13 +76,19 @@ function AgentsPage() {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
+  const { data: agents = [], isLoading } = useQuery({
+    queryKey: ["agents"],
+    queryFn: () => agentsService.getAll(),
+    retry: 1,
+  });
+
   if (pathname.startsWith("/admin/agents/")) {
     return <Outlet />;
   }
 
   const list = agents.filter(
     (a) =>
-      (status === "all" || a.status === status) &&
+      (status === "all" || a.status.toLowerCase() === status) &&
       (q === "" ||
         a.name.toLowerCase().includes(q.toLowerCase()) ||
         a.role.toLowerCase().includes(q.toLowerCase())),
@@ -71,10 +96,10 @@ function AgentsPage() {
 
   const counts = {
     all: agents.length,
-    online: agents.filter((a) => a.status === "online").length,
-    busy: agents.filter((a) => a.status === "busy").length,
-    away: agents.filter((a) => a.status === "away").length,
-    offline: agents.filter((a) => a.status === "offline").length,
+    online: agents.filter((a) => a.status.toLowerCase() === "online").length,
+    busy: agents.filter((a) => a.status.toLowerCase() === "busy").length,
+    away: agents.filter((a) => a.status.toLowerCase() === "away").length,
+    offline: agents.filter((a) => a.status.toLowerCase() === "offline").length,
   };
 
   return (
@@ -82,11 +107,12 @@ function AgentsPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Agents</h1>
-          <p className="text-sm text-muted-foreground">
-            Team status, performance and shifts.
-          </p>
+          <p className="text-sm text-muted-foreground">Team status, performance and shifts.</p>
         </div>
-        <Button className="gradient-primary text-primary-foreground" onClick={() => setAddOpen(true)}>
+        <Button
+          className="gradient-primary text-primary-foreground"
+          onClick={() => setAddOpen(true)}
+        >
           <Plus className="mr-1.5 h-4 w-4" /> Add agent
         </Button>
       </div>
@@ -112,10 +138,7 @@ function AgentsPage() {
                 : "glass text-foreground hover:bg-accent",
             )}
           >
-            {s.l}{" "}
-            <span className="ml-1 opacity-70">
-              {counts[s.k as keyof typeof counts]}
-            </span>
+            {s.l} <span className="ml-1 opacity-70">{counts[s.k as keyof typeof counts]}</span>
           </button>
         ))}
       </div>
@@ -132,104 +155,125 @@ function AgentsPage() {
             />
           </div>
           <span className="text-xs text-muted-foreground">
-            {list.length} {list.length === 1 ? "agent" : "agents"}
+            {isLoading ? "Loading…" : `${list.length} ${list.length === 1 ? "agent" : "agents"}`}
           </span>
         </div>
 
         <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent border-border/40">
-              <TableHead className="pl-4">Agent</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Shift</TableHead>
-              <TableHead className="text-right">Chats</TableHead>
-              <TableHead className="text-right">CSAT</TableHead>
-              <TableHead className="pr-4 text-right">Actions</TableHead>
-
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {list.map((a) => {
-              return (
-
-                <TableRow
-                  key={a.id}
-                  onClick={() => navigate({ to: "/admin/agents/$agentId", params: { agentId: a.id } })}
-                  className="cursor-pointer border-border/40"
-                >
-                  <TableCell className="pl-4 py-3">
-                    <div className="flex items-center gap-3">
-                      <div className="relative">
-                        <span className="flex h-10 w-10 items-center justify-center rounded-xl gradient-primary text-xs font-semibold text-primary-foreground">
-                          {a.avatar}
-                        </span>
-                        <span
-                          className={cn(
-                            "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-card",
-                            statusDot[a.status],
-                          )}
-                        />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold">{a.name}</p>
-                        <p className="text-[11px] text-muted-foreground">{a.role}</p>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <span
-                      className={cn(
-                        "rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize",
-                        statusPill[a.status],
-                      )}
-                    >
-                      {a.status}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{a.shift}</TableCell>
-                  <TableCell className="text-right text-sm font-medium">{a.chats}</TableCell>
-                  <TableCell className="text-right text-sm font-medium">
-                    {a.csat ? `${a.csat}%` : "—"}
-                  </TableCell>
-
-                  <TableCell className="pr-4">
-                    <div className="flex items-center justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={(e) => e.stopPropagation()}
-                        title={`Message ${a.name}`}
-                        asChild
-                      >
-                        <Link to="/admin/chats" search={{ agent: a.id }}>
-                          <MessageSquare className="h-4 w-4" />
-                        </Link>
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => e.stopPropagation()}
-                        asChild
-                      >
-                        <Link to="/admin/agents/$agentId" params={{ agentId: a.id }}>
-                          View <ChevronRight className="h-3.5 w-3.5" />
-                        </Link>
-                      </Button>
-                    </div>
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent border-border/40">
+                <TableHead className="pl-4">Agent</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead>Last seen</TableHead>
+                <TableHead className="pr-4 text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={5}
+                    className="py-10 text-center text-sm text-muted-foreground"
+                  >
+                    <Loader2 className="mx-auto h-5 w-5 animate-spin" />
                   </TableCell>
                 </TableRow>
-              );
-            })}
-            {list.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
-                  No agents match your filters.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
+              ) : list.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={5}
+                    className="py-10 text-center text-sm text-muted-foreground"
+                  >
+                    No agents match your filters.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                list.map((a) => (
+                  <TableRow
+                    key={a.id}
+                    onClick={() =>
+                      navigate({ to: "/admin/agents/$agentId", params: { agentId: a.id } })
+                    }
+                    className="cursor-pointer border-border/40"
+                  >
+                    <TableCell className="pl-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="relative">
+                          {a.avatarUrl ? (
+                            <img
+                              src={a.avatarUrl}
+                              alt={a.name}
+                              className="h-10 w-10 rounded-xl object-cover ring-2 ring-border"
+                            />
+                          ) : (
+                            <span className="flex h-10 w-10 items-center justify-center rounded-xl gradient-primary text-xs font-semibold text-primary-foreground">
+                              {a.name
+                                .split(" ")
+                                .map((p) => p[0])
+                                .join("")
+                                .slice(0, 2)
+                                .toUpperCase()}
+                            </span>
+                          )}
+                          <span
+                            className={cn(
+                              "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-card",
+                              statusDot[a.status] ?? "bg-muted-foreground",
+                            )}
+                          />
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold">{a.name}</p>
+                          <p className="text-[11px] text-muted-foreground">{a.email}</p>
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <span
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize",
+                          statusPill[a.status] ?? "bg-muted text-muted-foreground",
+                        )}
+                      >
+                        {a.status.toLowerCase()}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{a.role}</TableCell>
+                    <TableCell className="text-[11px] text-muted-foreground">
+                      {a.lastSeenAt ? new Date(a.lastSeenAt).toLocaleString() : "—"}
+                    </TableCell>
+                    <TableCell className="pr-4">
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={(e) => e.stopPropagation()}
+                          title={`Message ${a.name}`}
+                          asChild
+                        >
+                          <Link to="/admin/chats" search={{ agent: a.id }}>
+                            <MessageSquare className="h-4 w-4" />
+                          </Link>
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => e.stopPropagation()}
+                          asChild
+                        >
+                          <Link to="/admin/agents/$agentId" params={{ agentId: a.id }}>
+                            View <ChevronRight className="h-3.5 w-3.5" />
+                          </Link>
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
         </div>
       </GlassCard>
     </div>
@@ -243,7 +287,14 @@ function generatePassword() {
   return out;
 }
 
-function AddAgentDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+function AddAgentDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -253,16 +304,37 @@ function AddAgentDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const createMutation = useMutation({
+    mutationFn: (body: { name: string; email: string; password: string }) =>
+      agentsService.create({ ...body, role: "Agent" }),
+    onSuccess: (data) => {
+      toast.success(`Agent ${data.name} created successfully`);
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      reset();
+      onOpenChange(false);
+    },
+    onError: (err: Error) => {
+      toast.error(err.message ?? "Failed to create agent");
+    },
+  });
+
   const reset = () => {
-    setFirstName(""); setLastName(""); setEmail("");
-    setPassword(generatePassword()); setShowPwd(false); setForceReset(true);
+    setFirstName("");
+    setLastName("");
+    setEmail("");
+    setPassword(generatePassword());
+    setShowPwd(false);
+    setForceReset(true);
     setAvatarPreview(null);
   };
 
   const handleAvatar = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) { toast.error("Image must be under 2MB"); return; }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("Image must be under 2MB");
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => setAvatarPreview(reader.result as string);
     reader.readAsDataURL(file);
@@ -270,16 +342,33 @@ function AddAgentDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!firstName.trim() || !lastName.trim()) { toast.error("First and last name are required"); return; }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { toast.error("Enter a valid work email"); return; }
-    if (password.length < 8) { toast.error("Password must be at least 8 characters"); return; }
-    toast.success(`Agent ${firstName} ${lastName} created`);
-    reset();
-    onOpenChange(false);
+    if (!firstName.trim() || !lastName.trim()) {
+      toast.error("First and last name are required");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      toast.error("Enter a valid work email");
+      return;
+    }
+    if (password.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+    createMutation.mutate({
+      name: `${firstName.trim()} ${lastName.trim()}`,
+      email: email.trim(),
+      password,
+    });
   };
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) reset(); }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        onOpenChange(v);
+        if (!v) reset();
+      }}
+    >
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Add agent</DialogTitle>
@@ -293,46 +382,91 @@ function AddAgentDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
           <div className="flex items-center gap-4">
             <div className="relative">
               {avatarPreview ? (
-                <img src={avatarPreview} alt="Avatar preview" className="h-16 w-16 rounded-xl object-cover ring-2 ring-border" />
+                <img
+                  src={avatarPreview}
+                  alt="Avatar preview"
+                  className="h-16 w-16 rounded-xl object-cover ring-2 ring-border"
+                />
               ) : (
                 <div className="flex h-16 w-16 items-center justify-center rounded-xl gradient-primary text-sm font-semibold text-primary-foreground">
-                  {(firstName[0] ?? "").toUpperCase()}{(lastName[0] ?? "").toUpperCase() || "?"}
+                  {(firstName[0] ?? "").toUpperCase()}
+                  {(lastName[0] ?? "").toUpperCase() || "?"}
                 </div>
               )}
             </div>
             <div className="flex-1">
               <Label className="text-xs">Profile picture / avatar</Label>
-              <p className="text-[11px] text-muted-foreground mb-1.5">Optional. Shown in the chat widget. Max 2MB.</p>
+              <p className="text-[11px] text-muted-foreground mb-1.5">
+                Optional. Shown in the chat widget. Max 2MB.
+              </p>
               <div className="flex gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fileRef.current?.click()}
+                >
                   <Upload className="mr-1.5 h-3.5 w-3.5" /> Upload
                 </Button>
                 {avatarPreview && (
-                  <Button type="button" variant="ghost" size="sm" onClick={() => setAvatarPreview(null)}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setAvatarPreview(null)}
+                  >
                     Remove
                   </Button>
                 )}
               </div>
-              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleAvatar} />
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleAvatar}
+              />
             </div>
           </div>
 
           {/* Names */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="firstName" className="text-xs">First name</Label>
-              <Input id="firstName" value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="John" maxLength={50} required />
+              <Label htmlFor="firstName" className="text-xs">
+                First name
+              </Label>
+              <Input
+                id="firstName"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                placeholder="John"
+                maxLength={50}
+                required
+              />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="lastName" className="text-xs">Last name</Label>
-              <Input id="lastName" value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Doe" maxLength={50} required />
+              <Label htmlFor="lastName" className="text-xs">
+                Last name
+              </Label>
+              <Input
+                id="lastName"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                placeholder="Doe"
+                maxLength={50}
+                required
+              />
             </div>
           </div>
-          <p className="-mt-3 text-[11px] text-muted-foreground">Real name for internal HR records.</p>
+          <p className="-mt-3 text-[11px] text-muted-foreground">
+            Real name for internal HR records.
+          </p>
 
           {/* Email */}
           <div className="space-y-1.5">
-            <Label htmlFor="email" className="text-xs">Work email address</Label>
+            <Label htmlFor="email" className="text-xs">
+              Work email address
+            </Label>
             <Input
               id="email"
               type="email"
@@ -342,12 +476,16 @@ function AddAgentDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
               maxLength={120}
               required
             />
-            <p className="text-[11px] text-muted-foreground">Used for login, notifications, and password resets.</p>
+            <p className="text-[11px] text-muted-foreground">
+              Used for login, notifications, and password resets.
+            </p>
           </div>
 
           {/* Password */}
           <div className="space-y-1.5">
-            <Label htmlFor="password" className="text-xs">Temporary password</Label>
+            <Label htmlFor="password" className="text-xs">
+              Temporary password
+            </Label>
             <div className="flex gap-2">
               <div className="relative flex-1">
                 <Input
@@ -369,7 +507,13 @@ function AddAgentDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
                   {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                 </button>
               </div>
-              <Button type="button" variant="outline" size="icon" onClick={() => setPassword(generatePassword())} title="Generate new password">
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setPassword(generatePassword())}
+                title="Generate new password"
+              >
                 <RefreshCw className="h-4 w-4" />
               </Button>
             </div>
@@ -383,8 +527,22 @@ function AddAgentDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (
           </div>
 
           <DialogFooter className="gap-2 sm:gap-2">
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" className="gradient-primary text-primary-foreground">Create agent</Button>
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              className="gradient-primary text-primary-foreground"
+              disabled={createMutation.isPending}
+            >
+              {createMutation.isPending ? (
+                <>
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Creating…
+                </>
+              ) : (
+                "Create agent"
+              )}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

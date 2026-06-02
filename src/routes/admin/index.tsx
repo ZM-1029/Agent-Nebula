@@ -3,20 +3,33 @@ import { StatCard } from "@/components/admin/stat-card";
 import { GlassCard } from "@/components/admin/glass-card";
 import { Users, Ticket, MessagesSquare, Clock, Zap, ArrowUpRight } from "lucide-react";
 import {
-  Area, AreaChart, ResponsiveContainer, Tooltip,
-  XAxis, YAxis, BarChart, Bar, CartesianGrid,
+  Area,
+  AreaChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+  BarChart,
+  Bar,
+  CartesianGrid,
 } from "recharts";
-import {
-  sessionsSeries, responseTimeBars, activity, conversations,
-} from "@/lib/admin-mock/data";
+// Charts still use mock series — no backend endpoint for historical volume/response-time data
+import { sessionsSeries, responseTimeBars, activity } from "@/lib/admin-mock/data";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
+import { useQuery } from "@tanstack/react-query";
+import { agentsService } from "@/services/agentsService";
+import { ticketsService } from "@/services/ticketsService";
+import { liveChatService } from "@/services/liveChatService";
 
 export const Route = createFileRoute("/admin/")({
   head: () => ({
     meta: [
       { title: "Dashboard — Helix Support" },
-      { name: "description", content: "Realtime overview of live chats, tickets, agents and AI-assisted support." },
+      {
+        name: "description",
+        content: "Realtime overview of live chats, tickets, agents and AI-assisted support.",
+      },
     ],
   }),
   component: Dashboard,
@@ -41,37 +54,73 @@ function Dashboard() {
   const { user } = useAuth();
   const firstName = user?.displayName?.split(" ")[0] ?? "there";
 
-  const recentConvos = conversations.slice(0, 5).map((c) => ({
-    id: c.id,
-    customer: c.customer,
-    preview: c.preview,
-    unread: c.unread,
-  }));
+  const { data: agents = [] } = useQuery({
+    queryKey: ["agents"],
+    queryFn: () => agentsService.getAll(),
+    retry: 1,
+    refetchInterval: 30_000,
+  });
+
+  const { data: tickets = [] } = useQuery({
+    queryKey: ["tickets"],
+    queryFn: () => ticketsService.getAll(),
+    retry: 1,
+    refetchInterval: 60_000,
+  });
+
+  const { data: sessions = [] } = useQuery({
+    queryKey: ["admin-sessions"],
+    queryFn: () => liveChatService.getActiveSessions(),
+    retry: 1,
+    refetchInterval: 15_000,
+  });
+
+  const onlineAgents = agents.filter((a) => a.status.toLowerCase() === "online").length;
+  const openTickets = tickets.filter(
+    (t) => !["resolved", "closed"].includes(t.status.toLowerCase()),
+  ).length;
+  const liveChats = sessions.length;
 
   return (
     <div className="space-y-5">
       {/* Header */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="text-xs font-medium uppercase tracking-widest text-primary">Live overview</p>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight">Good afternoon, {firstName}</h1>
+          <p className="text-xs font-medium uppercase tracking-widest text-primary">
+            Live overview
+          </p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight">
+            Good afternoon, {firstName}
+          </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Here's what's happening across your support desk right now.
           </p>
         </div>
         <div className="flex items-center gap-2 rounded-full glass px-3 py-1.5 text-xs">
           <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
-          <span className="font-medium">38 live chats</span>
-          <span className="text-muted-foreground">· 96% CSAT today</span>
+          <span className="font-medium">{liveChats} live chats</span>
+          <span className="text-muted-foreground">· {onlineAgents} agents online</span>
         </div>
       </div>
 
       {/* Stat grid */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <StatCard label="Active agents"   value={14}     delta={8}   icon={Users}          tone="primary" />
-        <StatCard label="Total tickets"   value={1247}   delta={12}  icon={Ticket}         tone="blue" />
-        <StatCard label="Live chats"      value={38}     delta={-3}  icon={MessagesSquare} tone="amber" />
-        <StatCard label="Avg response"    value="42s"    delta={-14} icon={Clock}          tone="violet" />
+        <StatCard
+          label="Online agents"
+          value={onlineAgents}
+          delta={0}
+          icon={Users}
+          tone="primary"
+        />
+        <StatCard label="Open tickets" value={openTickets} delta={0} icon={Ticket} tone="blue" />
+        <StatCard
+          label="Live chats"
+          value={liveChats}
+          delta={0}
+          icon={MessagesSquare}
+          tone="amber"
+        />
+        <StatCard label="Total agents" value={agents.length} delta={0} icon={Clock} tone="violet" />
       </div>
 
       {/* Conversation volume chart */}
@@ -108,11 +157,34 @@ function Dashboard() {
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 6" stroke="var(--border)" vertical={false} />
-            <XAxis dataKey="day" stroke="var(--muted-foreground)" fontSize={11} tickLine={false} axisLine={false} />
-            <YAxis stroke="var(--muted-foreground)" fontSize={11} tickLine={false} axisLine={false} />
+            <XAxis
+              dataKey="day"
+              stroke="var(--muted-foreground)"
+              fontSize={11}
+              tickLine={false}
+              axisLine={false}
+            />
+            <YAxis
+              stroke="var(--muted-foreground)"
+              fontSize={11}
+              tickLine={false}
+              axisLine={false}
+            />
             <Tooltip content={<ChartTooltip />} />
-            <Area type="monotone" dataKey="sessions" stroke="var(--primary)"      strokeWidth={2.5} fill="url(#gSess)" />
-            <Area type="monotone" dataKey="resolved" stroke="var(--accent-blue)"  strokeWidth={2.5} fill="url(#gRes)" />
+            <Area
+              type="monotone"
+              dataKey="sessions"
+              stroke="var(--primary)"
+              strokeWidth={2.5}
+              fill="url(#gSess)"
+            />
+            <Area
+              type="monotone"
+              dataKey="resolved"
+              stroke="var(--accent-blue)"
+              strokeWidth={2.5}
+              fill="url(#gRes)"
+            />
           </AreaChart>
         </ResponsiveContainer>
       </GlassCard>
@@ -125,8 +197,19 @@ function Dashboard() {
           <ResponsiveContainer width="100%" height={180} className="mt-3">
             <BarChart data={responseTimeBars} margin={{ left: -20, right: 0 }}>
               <CartesianGrid strokeDasharray="3 6" stroke="var(--border)" vertical={false} />
-              <XAxis dataKey="hour" stroke="var(--muted-foreground)" fontSize={10} tickLine={false} axisLine={false} />
-              <YAxis stroke="var(--muted-foreground)" fontSize={10} tickLine={false} axisLine={false} />
+              <XAxis
+                dataKey="hour"
+                stroke="var(--muted-foreground)"
+                fontSize={10}
+                tickLine={false}
+                axisLine={false}
+              />
+              <YAxis
+                stroke="var(--muted-foreground)"
+                fontSize={10}
+                tickLine={false}
+                axisLine={false}
+              />
               <Tooltip content={<ChartTooltip />} />
               <Bar dataKey="avg" radius={[6, 6, 0, 0]} fill="var(--primary)" />
             </BarChart>
@@ -153,7 +236,7 @@ function Dashboard() {
           </ol>
         </GlassCard>
 
-        {/* Recent conversations */}
+        {/* Recent conversations — live from API */}
         <GlassCard>
           <div className="mb-3 flex items-center justify-between">
             <p className="text-sm font-semibold">Recent conversations</p>
@@ -162,22 +245,36 @@ function Dashboard() {
             </a>
           </div>
           <div className="space-y-2">
-            {recentConvos.map((c) => (
-              <div key={c.id} className="flex items-center gap-3 rounded-xl p-2 transition hover:bg-accent/60">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full gradient-primary text-xs font-semibold text-primary-foreground">
-                  {c.customer.slice(0, 2).toUpperCase()}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-medium">{c.customer}</p>
-                  <p className="truncate text-[11px] text-muted-foreground">{c.preview}</p>
-                </div>
-                {c.unread > 0 && (
-                  <span className="rounded-full bg-destructive px-1.5 text-[10px] font-bold text-white">
-                    {c.unread}
+            {sessions.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No active sessions</p>
+            ) : (
+              sessions.slice(0, 5).map((s) => (
+                <div
+                  key={s.id}
+                  className="flex items-center gap-3 rounded-xl p-2 transition hover:bg-accent/60"
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full gradient-primary text-xs font-semibold text-primary-foreground">
+                    {s.customerName.slice(0, 2).toUpperCase()}
                   </span>
-                )}
-              </div>
-            ))}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium">{s.customerName}</p>
+                    <p className="truncate text-[11px] text-muted-foreground">
+                      {s.agentName ? `With ${s.agentName}` : "Unassigned"} · {s.reference}
+                    </p>
+                  </div>
+                  <span
+                    className={cn(
+                      "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold capitalize",
+                      s.status.toLowerCase() === "active"
+                        ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                        : "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+                    )}
+                  >
+                    {s.status}
+                  </span>
+                </div>
+              ))
+            )}
           </div>
         </GlassCard>
       </div>

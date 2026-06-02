@@ -1,0 +1,31 @@
+/**
+ * Shared authenticated fetch helper.
+ * All live-chat service modules import from here so the JWT key is in one place.
+ */
+
+export const API_BASE = "http://150.241.246.64:588";
+
+export const JWT_KEY = "frankie_jwt";
+export const REFRESH_KEY = "frankie_refresh_token";
+
+export function getJwt(): string {
+  return localStorage.getItem(JWT_KEY) ?? "";
+}
+
+export async function authFetch<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${getJwt()}`,
+      ...(init?.headers ?? {}),
+    },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+  // 204 No Content — return undefined cast to T
+  if (res.status === 204) return undefined as unknown as T;
+  return res.json() as Promise<T>;
+}

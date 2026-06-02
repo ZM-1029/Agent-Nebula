@@ -1,23 +1,56 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import {
-  MessagesSquare, Inbox, BarChart3, Settings, Sparkles,
-} from "lucide-react";
+import { MessagesSquare, Inbox, BarChart3, Settings, Sparkles } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/use-auth";
+import { liveChatService } from "@/services/liveChatService";
 
-const workspace = [
-  { to: "/live-chats", label: "Live Chats", icon: MessagesSquare, badge: "12" },
-  { to: "/ticket-queue", label: "Session queue", icon: Inbox, badge: "8" },
-  { to: "/performance", label: "Performance", icon: BarChart3 },
-];
+const bottom = [{ to: "/settings", label: "Settings", icon: Settings }];
 
-const bottom = [
-  { to: "/settings", label: "Settings", icon: Settings },
-];
-
-export function Sidebar({ variant = "desktop", onNavigate }: { variant?: "desktop" | "mobile"; onNavigate?: () => void }) {
+export function Sidebar({
+  variant = "desktop",
+  onNavigate,
+}: {
+  variant?: "desktop" | "mobile";
+  onNavigate?: () => void;
+}) {
   const path = useRouterState({ select: (s) => s.location.pathname });
   const isActive = (to: string, exact?: boolean) =>
     exact ? path === to : path === to || path.startsWith(to + "/");
+
+  const { user } = useAuth();
+  const agentId = user?.id ?? "";
+
+  const { data: sessions = [] } = useQuery({
+    queryKey: ["agent-sessions", agentId],
+    queryFn: () => liveChatService.getAgentSessions(agentId),
+    enabled: !!agentId,
+    retry: 1,
+    refetchInterval: 15_000,
+  });
+
+  const { data: queue = [] } = useQuery({
+    queryKey: ["queue"],
+    queryFn: () => liveChatService.getQueue(),
+    retry: 1,
+    refetchInterval: 15_000,
+  });
+
+  const workspace = [
+    {
+      to: "/live-chats",
+      label: "Live Chats",
+      icon: MessagesSquare,
+      badge: sessions.length ? String(sessions.length) : undefined,
+    },
+    {
+      to: "/ticket-queue",
+      label: "Session queue",
+      icon: Inbox,
+      badge: queue.length ? String(queue.length) : undefined,
+    },
+    { to: "/performance", label: "Performance", icon: BarChart3 },
+  ];
 
   const inner = (
     <>
@@ -57,18 +90,36 @@ export function Sidebar({ variant = "desktop", onNavigate }: { variant?: "deskto
   );
 }
 
-
 function SectionLabel({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn("px-2 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80", className)}>
+    <div
+      className={cn(
+        "px-2 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80",
+        className,
+      )}
+    >
       {children}
     </div>
   );
 }
 
 function NavItem({
-  to, label, icon: Icon, badge, dot, active, onNavigate,
-}: { to: string; label: string; icon: any; badge?: string; dot?: boolean; active?: boolean; onNavigate?: () => void }) {
+  to,
+  label,
+  icon: Icon,
+  badge,
+  dot,
+  active,
+  onNavigate,
+}: {
+  to: string;
+  label: string;
+  icon: any;
+  badge?: string;
+  dot?: boolean;
+  active?: boolean;
+  onNavigate?: () => void;
+}) {
   return (
     <Link
       to={to}
@@ -83,14 +134,18 @@ function NavItem({
       <Icon className={cn("h-[18px] w-[18px]", active ? "text-white" : "text-foreground/60")} />
       <span className="flex-1">{label}</span>
       {badge && (
-        <span className={cn(
-          "rounded-full px-2 py-0.5 text-[10px] font-semibold",
-          active ? "bg-white/25 text-white" : "bg-foreground/5 text-foreground/70",
-        )}>
+        <span
+          className={cn(
+            "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+            active ? "bg-white/25 text-white" : "bg-foreground/5 text-foreground/70",
+          )}
+        >
           {badge}
         </span>
       )}
-      {dot && <span className="h-2 w-2 rounded-full bg-sky shadow-[0_0_8px_rgba(75,163,227,0.9)]" />}
+      {dot && (
+        <span className="h-2 w-2 rounded-full bg-sky shadow-[0_0_8px_rgba(75,163,227,0.9)]" />
+      )}
     </Link>
   );
 }

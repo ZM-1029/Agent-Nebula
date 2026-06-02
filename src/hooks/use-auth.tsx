@@ -23,12 +23,24 @@ interface AuthContextValue {
   ) => Promise<{ error: Error | null }>;
   signInWithGoogle: (role: AppRole) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
+  /** Merge updated fields into the current user (e.g. after a profile save). */
+  updateUser: (patch: Partial<LocalUser>) => void;
 }
 
 // Fallback demo accounts — used when the backend is unreachable
 const DEMO_ACCOUNTS = [
-  { email: "admin@frankie.demo", password: "Frankie-Admin-2026!", role: "admin" as AppRole, displayName: "John Doe" },
-  { email: "agent@frankie.demo", password: "Frankie-Agent-2026!", role: "agent" as AppRole, displayName: "Alex Agent" },
+  {
+    email: "admin@frankie.demo",
+    password: "Frankie-Admin-2026!",
+    role: "admin" as AppRole,
+    displayName: "John Doe",
+  },
+  {
+    email: "agent@frankie.demo",
+    password: "Frankie-Agent-2026!",
+    role: "agent" as AppRole,
+    displayName: "Alex Agent",
+  },
 ];
 
 const AUTH_KEY = "frankie_session";
@@ -94,7 +106,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (data.refreshToken) localStorage.setItem(REFRESH_KEY, data.refreshToken as string);
         return { error: null };
       }
-      const errData = await res.json().catch(() => ({})) as { error?: string };
+      const errData = (await res.json().catch(() => ({}))) as { error?: string };
       return { error: new Error(errData.error ?? "Invalid login credentials") };
     } catch {
       // ── Backend unreachable — fall back to demo accounts ────────────────
@@ -113,7 +125,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // New accounts are created by an Admin via /api/agents — no self-registration.
   const signUpWithPassword: AuthContextValue["signUpWithPassword"] = async () => {
     return {
-      error: new Error("New accounts are created by an Administrator via the agent management panel."),
+      error: new Error(
+        "New accounts are created by an Administrator via the agent management panel.",
+      ),
     };
   };
 
@@ -129,11 +143,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(REFRESH_KEY);
   };
 
+  const updateUser: AuthContextValue["updateUser"] = (patch) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, ...patch };
+      localStorage.setItem(AUTH_KEY, JSON.stringify({ user: next, role }));
+      return next;
+    });
+  };
+
   const session = user ? { user } : null;
 
   return (
     <AuthContext.Provider
-      value={{ user, session, role, loading, signInWithPassword, signUpWithPassword, signInWithGoogle, signOut }}
+      value={{
+        user,
+        session,
+        role,
+        loading,
+        signInWithPassword,
+        signUpWithPassword,
+        signInWithGoogle,
+        signOut,
+        updateUser,
+      }}
     >
       {children}
     </AuthContext.Provider>

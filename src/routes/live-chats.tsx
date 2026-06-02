@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/frankie/AppShell";
 import { GlassCard } from "@/components/frankie/GlassCard";
-import { cannedReplies } from "@/data/dummy";
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
   Paperclip,
@@ -9,17 +8,18 @@ import {
   Send,
   FileText,
   ChevronDown,
-  Phone,
-  Video,
-  MoreHorizontal,
   Search,
   Filter,
   ArrowLeft,
   User,
   Loader2,
   MessageSquare,
+  CheckCircle2,
+  ArrowRightLeft,
+  Inbox,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { toast } from "sonner";
 import {
   liveChatService,
   createLiveChatHub,
@@ -27,9 +27,15 @@ import {
   HubMethods,
   type ActiveSession,
   type ChatMessage,
+  type QueueItem,
 } from "@/services/liveChatService";
+import { agentsService, type Agent } from "@/services/agentsService";
 import { useAuth } from "@/hooks/use-auth";
+import { useCannedReplies } from "@/lib/canned-replies";
 import * as signalR from "@microsoft/signalr";
+
+const AGENT_STATUSES = ["Online", "Busy", "Away", "Offline"] as const;
+type AgentStatus = (typeof AGENT_STATUSES)[number];
 
 export const Route = createFileRoute("/live-chats")({
   head: () => ({
@@ -66,6 +72,18 @@ function slaMinutesFor(session: ActiveSession): number {
   return Math.max(SLA_MINUTES - elapsed, 0);
 }
 
+/** Whole minutes a customer has been waiting since they joined the queue. */
+function waitMinutesSince(iso: string): number {
+  return Math.max(Math.floor((Date.now() - new Date(iso).getTime()) / 60000), 0);
+}
+
+function formatWait(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
 // ── Main component ─────────────────────────────────────────────────────────
 
 function LiveChats() {
@@ -83,8 +101,16 @@ function LiveChats() {
   const [hubState, setHubState] = useState<"connecting" | "connected" | "disconnected">(
     "connecting",
   );
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [myStatus, setMyStatus] = useState<AgentStatus>("Online");
+  const [accepting, setAccepting] = useState(false);
+  const [customerTyping, setCustomerTyping] = useState(false);
 
   const hubRef = useRef<signalR.HubConnection | null>(null);
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typingActiveRef = useRef(false);
+  const customerTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
 
@@ -103,6 +129,24 @@ function LiveChats() {
     }
   }, [agentId, activeId]);
 
+  // ── Load queue depth (for the Accept-next-chat control) ───────────────────
+  const fetchQueue = useCallback(async () => {
+    try {
+      const q = await liveChatService.getQueue();
+      setQueue(q);
+    } catch {
+      /* ignore — agent may not have queue read access */
+    }
+  }, []);
+
+  // ── Load agent roster (for the Transfer picker) ──────────────────────────
+  useEffect(() => {
+    agentsService
+      .getAll()
+      .then(setAgents)
+      .catch(() => {});
+  }, []);
+
   // ── Load messages for the selected session ───────────────────────────────
   const fetchMessages = useCallback(async (sessionId: string) => {
     setMessagesLoading(true);
@@ -117,8 +161,18 @@ function LiveChats() {
   }, []);
 
   useEffect(() => {
+    setCustomerTyping(false);
     if (activeId) fetchMessages(activeId);
   }, [activeId, fetchMessages]);
+
+  // Join the open session's SignalR group so the customer's live messages arrive.
+  // SignalR groups are per-connection, so this must re-run on every (re)connect
+  // and whenever the agent opens a different chat — otherwise messages only show
+  // after a manual refresh.
+  useEffect(() => {
+    if (!activeId || hubState !== "connected") return;
+    hubRef.current?.invoke(HubMethods.RejoinSession, activeId).catch(() => {});
+  }, [activeId, hubState]);
 
   // ── SignalR hub ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -126,6 +180,8 @@ function LiveChats() {
     hubRef.current = hub;
 
     hub.on(HubEvents.MessageReceived, (msg: ChatMessage) => {
+      // A new message means the customer is no longer mid-typing.
+      if (msg.senderType?.toLowerCase() === "customer") setCustomerTyping(false);
       // Only append if it belongs to the currently open session
       setMessages((prev) => {
         // avoid duplicates (SignalR may replay on reconnect)
@@ -139,7 +195,21 @@ function LiveChats() {
       });
     });
 
-    hub.on(HubEvents.QueueUpdated, () => {
+    // Customer typing indicator. Auto-clear after 4s in case the
+    // "stopped" event is dropped (e.g. customer closes the tab).
+    hub.on(HubEvents.CustomerTyping, () => {
+      setCustomerTyping(true);
+      if (customerTypingTimerRef.current) clearTimeout(customerTypingTimerRef.current);
+      customerTypingTimerRef.current = setTimeout(() => setCustomerTyping(false), 4000);
+    });
+    hub.on(HubEvents.CustomerStoppedTyping, () => {
+      if (customerTypingTimerRef.current) clearTimeout(customerTypingTimerRef.current);
+      setCustomerTyping(false);
+    });
+
+    hub.on(HubEvents.QueueUpdated, (snapshot?: unknown) => {
+      if (Array.isArray(snapshot)) setQueue(snapshot as QueueItem[]);
+      else fetchQueue();
       fetchSessions();
     });
 
@@ -151,10 +221,51 @@ function LiveChats() {
       fetchSessions();
     });
 
+    hub.on(HubEvents.QueueEmpty, () => {
+      setQueue([]);
+    });
+
+    // A chat was transferred to THIS agent.
+    hub.on(HubEvents.ChatTransferred, (payload?: { agentName?: string }) => {
+      toast.info(
+        payload?.agentName
+          ? `A chat was transferred to you (${payload.agentName}).`
+          : "A chat was transferred to you.",
+      );
+      fetchSessions();
+    });
+
+    // Supervisor whisper — private note, shown only to this agent.
+    hub.on(
+      HubEvents.WhisperReceived,
+      (payload?: { sessionId?: string; content?: string; timestamp?: string }) => {
+        if (!payload?.content) return;
+        toast("Supervisor whisper", { description: payload.content });
+        setMessages((prev) => [
+          ...prev,
+          {
+            senderType: "Admin",
+            senderName: "Supervisor",
+            content: payload.content!,
+            timestamp: payload.timestamp ?? new Date().toISOString(),
+            isWhisper: true,
+          },
+        ]);
+      },
+    );
+
+    // Keep our own status pill in sync when the server reports a change for us.
+    hub.on(HubEvents.AgentStatusChanged, (changedAgentId?: string, status?: string) => {
+      if (agentId && changedAgentId === agentId && status) {
+        setMyStatus(status as AgentStatus);
+      }
+    });
+
     hub.onreconnected(() => {
       setHubState("connected");
       fetchSessions();
-      if (agentId) hub.invoke(HubMethods.AgentConnect).catch(() => {});
+      fetchQueue();
+      if (agentId) hub.invoke(HubMethods.AgentConnect, agentId).catch(() => {});
     });
 
     hub.onclose(() => setHubState("disconnected"));
@@ -164,14 +275,16 @@ function LiveChats() {
       .then(async () => {
         setHubState("connected");
         if (agentId) {
-          await hub.invoke(HubMethods.AgentConnect).catch(() => {});
+          await hub.invoke(HubMethods.AgentConnect, agentId).catch(() => {});
         }
         fetchSessions();
+        fetchQueue();
       })
       .catch(() => {
         setHubState("disconnected");
         // Still load sessions via REST even if hub fails
         fetchSessions();
+        fetchQueue();
       });
 
     return () => {
@@ -179,17 +292,119 @@ function LiveChats() {
     };
   }, [agentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Typing indicator (agent → customer) ──────────────────────────────────
+  const stopTyping = useCallback(() => {
+    if (typingTimerRef.current) {
+      clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = null;
+    }
+    if (typingActiveRef.current && activeId) {
+      typingActiveRef.current = false;
+      hubRef.current?.invoke(HubMethods.AgentStoppedTyping, activeId).catch(() => {});
+    }
+  }, [activeId]);
+
+  const handleDraftChange = useCallback(
+    (v: string) => {
+      setDraft(v);
+      if (!activeId || hubRef.current?.state !== signalR.HubConnectionState.Connected) return;
+      if (!typingActiveRef.current) {
+        typingActiveRef.current = true;
+        hubRef.current.invoke(HubMethods.AgentTyping, activeId).catch(() => {});
+      }
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = setTimeout(stopTyping, 2500);
+    },
+    [activeId, stopTyping],
+  );
+
   // ── Send message ─────────────────────────────────────────────────────────
   const send = async () => {
     if (!draft.trim() || !activeId) return;
     const text = draft.trim();
     setDraft("");
+    stopTyping();
     try {
       if (hubRef.current?.state === signalR.HubConnectionState.Connected) {
-        await hubRef.current.invoke(HubMethods.AgentSendMessage, activeId, text);
+        await hubRef.current.invoke(HubMethods.AgentSendMessage, activeId, agentId, text);
       }
     } catch {
       /* hub send failed — message won't appear until next poll */
+    }
+  };
+
+  // ── Accept the next queued chat (FIFO) ───────────────────────────────────
+  const acceptNext = async () => {
+    if (!agentId || accepting) return;
+    if (hubRef.current?.state !== signalR.HubConnectionState.Connected) {
+      toast.error("Not connected to the live-chat server.");
+      return;
+    }
+    setAccepting(true);
+    try {
+      const res = (await hubRef.current.invoke(HubMethods.AcceptNextChat, agentId)) as {
+        id?: string;
+        customerName?: string;
+      } | null;
+      if (res?.id) {
+        toast.success(`Chat accepted — ${res.customerName ?? "customer"}.`);
+        await fetchSessions();
+        setActiveId(res.id);
+        setMobilePane("chat");
+      } else {
+        toast.info("No chats waiting in the queue.");
+      }
+    } catch {
+      toast.error("Couldn't accept the next chat.");
+    } finally {
+      setAccepting(false);
+    }
+  };
+
+  // ── Resolve the active chat (auto-creates a ticket on the backend) ────────
+  const resolveActive = async () => {
+    if (!activeId || !agentId) return;
+    try {
+      await hubRef.current?.invoke(HubMethods.ResolveChat, activeId, agentId, null);
+      toast.success("Chat resolved — ticket created.");
+      setActiveId(null);
+      setMessages([]);
+      setMobilePane("list");
+      await fetchSessions();
+    } catch {
+      toast.error("Couldn't resolve the chat.");
+    }
+  };
+
+  // ── Transfer the active chat to another agent ─────────────────────────────
+  const transferActive = async (newAgentId: string) => {
+    if (!activeId || !newAgentId) return;
+    try {
+      await hubRef.current?.invoke(HubMethods.TransferChat, activeId, newAgentId);
+      toast.success("Chat transferred.");
+      setActiveId(null);
+      setMessages([]);
+      setMobilePane("list");
+      await fetchSessions();
+    } catch {
+      toast.error("Couldn't transfer the chat.");
+    }
+  };
+
+  // ── Change own availability status ───────────────────────────────────────
+  const changeStatus = async (status: AgentStatus) => {
+    if (!agentId) return;
+    const prev = myStatus;
+    setMyStatus(status);
+    try {
+      if (hubRef.current?.state === signalR.HubConnectionState.Connected) {
+        await hubRef.current.invoke(HubMethods.UpdateStatus, agentId, status);
+      } else {
+        await agentsService.updateStatus(agentId, status);
+      }
+    } catch {
+      setMyStatus(prev);
+      toast.error("Couldn't update your status.");
     }
   };
 
@@ -200,30 +415,46 @@ function LiveChats() {
 
   return (
     <AppShell>
-      <div className="grid h-[calc(100vh-8rem)] gap-4 lg:h-[calc(100vh-7.5rem)] lg:grid-cols-[300px_minmax(0,1fr)_320px]">
-        <div className={mobilePane === "list" ? "block" : "hidden lg:block"}>
+      <div className="grid h-[calc(100vh-8rem)] grid-rows-1 gap-4 lg:h-[calc(100vh-7.5rem)] lg:grid-cols-[300px_minmax(0,1fr)_320px]">
+        <div className={mobilePane === "list" ? "block min-h-0" : "hidden lg:block lg:min-h-0"}>
           <ConvList
             sessions={sessions}
             loading={loading}
             activeId={activeId}
             setActive={openConv}
             hubState={hubState}
+            queue={queue}
+            accepting={accepting}
+            onAcceptNext={acceptNext}
+            myStatus={myStatus}
+            onStatusChange={changeStatus}
           />
         </div>
-        <div className={mobilePane === "chat" ? "block min-w-0" : "hidden lg:block lg:min-w-0"}>
+        <div
+          className={
+            mobilePane === "chat"
+              ? "block min-h-0 min-w-0"
+              : "hidden lg:block lg:min-h-0 lg:min-w-0"
+          }
+        >
           {activeSession ? (
             <ChatPane
               session={activeSession}
               messages={messages}
               messagesLoading={messagesLoading}
+              customerTyping={customerTyping}
               draft={draft}
-              setDraft={setDraft}
+              setDraft={handleDraftChange}
               showCanned={showCanned}
               setShowCanned={setShowCanned}
               onSend={send}
               onPick={(t: string) => setDraft(t)}
               onBack={() => setMobilePane("list")}
               onProfile={() => setMobilePane("profile")}
+              onResolve={resolveActive}
+              onTransfer={transferActive}
+              agents={agents}
+              selfId={agentId}
             />
           ) : (
             <GlassCard className="flex h-full items-center justify-center">
@@ -234,7 +465,7 @@ function LiveChats() {
             </GlassCard>
           )}
         </div>
-        <div className={mobilePane === "profile" ? "block" : "hidden lg:block"}>
+        <div className={mobilePane === "profile" ? "block min-h-0" : "hidden lg:block lg:min-h-0"}>
           <ProfilePane session={activeSession} onBack={() => setMobilePane("chat")} />
         </div>
       </div>
@@ -250,20 +481,33 @@ function ConvList({
   activeId,
   setActive,
   hubState,
+  queue,
+  accepting,
+  onAcceptNext,
+  myStatus,
+  onStatusChange,
 }: {
   sessions: ActiveSession[];
   loading: boolean;
   activeId: string | null;
   setActive: (id: string) => void;
   hubState: "connecting" | "connected" | "disconnected";
+  queue: QueueItem[];
+  accepting: boolean;
+  onAcceptNext: () => void;
+  myStatus: AgentStatus;
+  onStatusChange: (s: AgentStatus) => void;
 }) {
   const [filter, setFilter] = useState<"All" | "Active" | "Queued">("All");
+  const queueCount = queue.length;
   const list =
     filter === "Active"
       ? sessions.filter((s) => s.status === "Active")
       : filter === "Queued"
         ? sessions.filter((s) => s.status === "Queued")
         : sessions;
+  // Show waiting customers (with their issue + wait time) on the All/Queued tabs.
+  const showQueue = filter !== "Active" && queue.length > 0;
 
   const hubDot =
     hubState === "connected"
@@ -280,15 +524,29 @@ function ConvList({
           {sessions.length}
         </span>
         <span className={`ml-1 h-2 w-2 rounded-full ${hubDot}`} title={`Hub: ${hubState}`} />
-        <div className="ml-auto flex gap-1">
-          <button className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/60">
+        <div className="ml-auto flex items-center gap-1">
+          <StatusSelect value={myStatus} onChange={onStatusChange} />
+          <button className="grid h-7 w-7 place-items-center rounded-lg hover:bg-muted/60">
             <Search className="h-3.5 w-3.5" />
           </button>
-          <button className="grid h-7 w-7 place-items-center rounded-lg hover:bg-white/60">
+          <button className="grid h-7 w-7 place-items-center rounded-lg hover:bg-muted/60">
             <Filter className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
+
+      <button
+        onClick={onAcceptNext}
+        disabled={accepting || queueCount === 0}
+        className="mb-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-brand to-[oklch(0.78_0.16_155)] px-3 py-2 text-xs font-semibold text-white shadow-[0_8px_22px_-10px_rgba(87,184,92,0.8)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {accepting ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <Inbox className="h-3.5 w-3.5" />
+        )}
+        {queueCount > 0 ? `Accept next chat · ${queueCount} waiting` : "No chats in queue"}
+      </button>
       <div className="mb-2 flex gap-1 px-1 text-[11px]">
         {(["All", "Active", "Queued"] as const).map((f) => (
           <button
@@ -301,12 +559,56 @@ function ConvList({
         ))}
       </div>
       <div className="scrollbar-thin -mx-1 flex-1 overflow-y-auto px-1">
+        {showQueue && (
+          <div className="mb-2">
+            <div className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              Waiting in queue · {queueCount}
+            </div>
+            {queue.map((q) => {
+              const wait = waitMinutesSince(q.queuedAt);
+              const initials = q.customerName
+                .split(" ")
+                .map((p) => p[0])
+                .join("")
+                .slice(0, 2)
+                .toUpperCase();
+              return (
+                <div
+                  key={q.id}
+                  className="mb-1.5 flex w-full items-start gap-3 rounded-2xl border border-dashed border-amber/40 bg-amber/5 p-2.5"
+                >
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber/20 text-sm font-bold text-amber">
+                    {initials}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="truncate text-[13px] font-semibold">{q.customerName}</div>
+                      <span className="shrink-0 rounded-full bg-amber/15 px-2 py-0.5 font-mono text-[10px] font-bold text-amber">
+                        {formatWait(wait)}
+                      </span>
+                    </div>
+                    <div className="truncate text-[11px] text-muted-foreground">
+                      Ref: {q.reference}
+                    </div>
+                    {q.issueDescription && (
+                      <div className="mt-0.5 line-clamp-2 text-[11px] text-foreground/70">
+                        {q.issueDescription}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
         {loading ? (
           <div className="flex justify-center py-8">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
         ) : list.length === 0 ? (
-          <div className="py-8 text-center text-xs text-muted-foreground">No chats yet.</div>
+          !showQueue && (
+            <div className="py-8 text-center text-xs text-muted-foreground">No chats yet.</div>
+          )
         ) : (
           list.map((s) => {
             const isActive = s.id === activeId;
@@ -321,14 +623,14 @@ function ConvList({
               <button
                 key={s.id}
                 onClick={() => setActive(s.id)}
-                className={`mb-1.5 flex w-full items-start gap-3 rounded-2xl p-2.5 text-left transition ${isActive ? "bg-white/85 shadow-[0_8px_22px_-12px_rgba(87,184,92,0.5)] ring-1 ring-brand/30" : "hover:bg-white/55"}`}
+                className={`mb-1.5 flex w-full items-start gap-3 rounded-2xl p-2.5 text-left transition ${isActive ? "bg-white/85 shadow-[0_8px_22px_-12px_rgba(87,184,92,0.5)] ring-1 ring-brand/30 dark:bg-muted/70" : "hover:bg-white/55 dark:hover:bg-muted/40"}`}
               >
                 <div className="relative">
                   <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand/20 text-sm font-bold text-brand">
                     {initials}
                   </span>
                   {s.status === "Active" && (
-                    <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-brand ring-2 ring-white shadow-[0_0_8px_rgba(87,184,92,0.9)]" />
+                    <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-brand ring-2 ring-white shadow-[0_0_8px_rgba(87,184,92,0.9)] dark:ring-card" />
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
@@ -373,12 +675,46 @@ function SlaPill({ minutes }: { minutes: number }) {
   );
 }
 
+const STATUS_DOT: Record<AgentStatus, string> = {
+  Online: "bg-brand",
+  Busy: "bg-amber-400",
+  Away: "bg-sky-400",
+  Offline: "bg-foreground/30",
+};
+
+function StatusSelect({
+  value,
+  onChange,
+}: {
+  value: AgentStatus;
+  onChange: (s: AgentStatus) => void;
+}) {
+  return (
+    <label className="relative flex items-center" title="Your availability">
+      <span className={`absolute left-2 h-2 w-2 rounded-full ${STATUS_DOT[value]}`} />
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as AgentStatus)}
+        className="cursor-pointer appearance-none rounded-lg bg-foreground/5 py-1 pl-6 pr-6 text-[11px] font-semibold outline-none hover:bg-foreground/10"
+      >
+        {AGENT_STATUSES.map((s) => (
+          <option key={s} value={s}>
+            {s}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-1.5 h-3 w-3 text-foreground/50" />
+    </label>
+  );
+}
+
 // ── ChatPane ───────────────────────────────────────────────────────────────
 
 function ChatPane({
   session,
   messages,
   messagesLoading,
+  customerTyping,
   draft,
   setDraft,
   showCanned,
@@ -387,10 +723,15 @@ function ChatPane({
   onPick,
   onBack,
   onProfile,
+  onResolve,
+  onTransfer,
+  agents,
+  selfId,
 }: {
   session: ActiveSession;
   messages: ChatMessage[];
   messagesLoading: boolean;
+  customerTyping: boolean;
   draft: string;
   setDraft: (v: string) => void;
   showCanned: boolean;
@@ -399,20 +740,30 @@ function ChatPane({
   onPick: (t: string) => void;
   onBack: () => void;
   onProfile: () => void;
+  onResolve: () => void;
+  onTransfer: (agentId: string) => void;
+  agents: Agent[];
+  selfId: string;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [showTransfer, setShowTransfer] = useState(false);
+  const { replies: cannedReplies } = useCannedReplies();
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, customerTyping]);
+
+  const transferTargets = agents.filter(
+    (a) => a.id !== selfId && a.role !== "Admin" && a.status !== "Offline",
+  );
 
   return (
     <GlassCard className="flex h-full min-w-0 flex-col overflow-hidden">
       {/* header */}
-      <div className="flex items-center gap-2 border-b border-white/60 px-3 py-3 sm:gap-3 sm:px-5 sm:py-3.5">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-3 sm:gap-3 sm:px-5 sm:py-3.5">
         <button
           onClick={onBack}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl hover:bg-white/60 lg:hidden"
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl hover:bg-muted/60 lg:hidden"
           aria-label="Back to inbox"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -439,19 +790,61 @@ function ChatPane({
         </div>
         <button
           onClick={onProfile}
-          className="grid h-9 w-9 place-items-center rounded-xl hover:bg-white/60 lg:hidden"
+          className="grid h-9 w-9 place-items-center rounded-xl hover:bg-muted/60 lg:hidden"
           aria-label="Customer profile"
         >
           <User className="h-4 w-4" />
         </button>
-        <button className="hidden h-9 w-9 place-items-center rounded-xl hover:bg-white/60 sm:grid">
-          <Phone className="h-4 w-4" />
-        </button>
-        <button className="hidden h-9 w-9 place-items-center rounded-xl hover:bg-white/60 sm:grid">
-          <Video className="h-4 w-4" />
-        </button>
-        <button className="hidden h-9 w-9 place-items-center rounded-xl hover:bg-white/60 sm:grid">
-          <MoreHorizontal className="h-4 w-4" />
+
+        {/* Transfer */}
+        <div className="relative">
+          <button
+            onClick={() => setShowTransfer((v) => !v)}
+            className="flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs font-semibold text-foreground/70 hover:bg-muted/60"
+            title="Transfer chat"
+          >
+            <ArrowRightLeft className="h-4 w-4" />
+            <span className="hidden sm:inline">Transfer</span>
+          </button>
+          {showTransfer && (
+            <div className="absolute right-0 top-11 z-20 w-56 rounded-2xl border border-border bg-popover p-2 shadow-xl backdrop-blur">
+              <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Transfer to agent
+              </div>
+              {transferTargets.length === 0 ? (
+                <div className="px-2 py-2 text-xs text-muted-foreground">
+                  No other agents available.
+                </div>
+              ) : (
+                transferTargets.map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => {
+                      setShowTransfer(false);
+                      onTransfer(a.id);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs hover:bg-brand/10"
+                  >
+                    <span
+                      className={`h-2 w-2 rounded-full ${STATUS_DOT[a.status as AgentStatus] ?? "bg-foreground/30"}`}
+                    />
+                    <span className="flex-1 truncate font-medium">{a.name}</span>
+                    <span className="text-[10px] text-muted-foreground">{a.status}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Resolve */}
+        <button
+          onClick={onResolve}
+          className="flex h-9 items-center gap-1.5 rounded-xl bg-brand/10 px-2.5 text-xs font-semibold text-brand hover:bg-brand/20"
+          title="Resolve chat & create ticket"
+        >
+          <CheckCircle2 className="h-4 w-4" />
+          <span className="hidden sm:inline">Resolve</span>
         </button>
       </div>
 
@@ -468,65 +861,93 @@ function ChatPane({
           <div className="py-8 text-center text-xs text-muted-foreground">No messages yet.</div>
         ) : (
           <AnimatePresence initial={false}>
-            {messages
-              .filter((m) => !m.isWhisper)
-              .map((m, i) => {
-                const fromCustomer = m.senderType.toLowerCase() === "customer";
+            {messages.map((m, i) => {
+              if (m.isWhisper) {
                 return (
                   <motion.div
                     key={i}
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className={`flex ${fromCustomer ? "justify-start" : "justify-end"}`}
+                    className="flex justify-center"
                   >
-                    <div
-                      className={`max-w-[70%] rounded-2xl px-4 py-2.5 text-sm shadow-sm ${fromCustomer ? "rounded-bl-md bg-white/85 text-foreground" : "rounded-br-md bg-gradient-to-br from-brand to-[oklch(0.78_0.16_155)] text-white"}`}
-                    >
-                      {m.content}
-                      <div
-                        className={`mt-1 text-[10px] ${!fromCustomer ? "text-white/70" : "text-muted-foreground"}`}
-                      >
-                        {m.senderName} · {formatMsgTime(m.timestamp)}
-                      </div>
+                    <div className="max-w-[80%] rounded-2xl border border-amber-400/40 bg-amber-50/80 px-3 py-2 text-center text-[11px] text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-500/30">
+                      <span className="font-semibold">Whisper · {m.senderName}:</span> {m.content}
                     </div>
                   </motion.div>
                 );
-              })}
+              }
+              const fromCustomer = m.senderType.toLowerCase() === "customer";
+              return (
+                <motion.div
+                  key={i}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className={`flex ${fromCustomer ? "justify-start" : "justify-end"}`}
+                >
+                  <div
+                    className={`max-w-[70%] rounded-2xl px-4 py-2.5 text-sm shadow-sm ${fromCustomer ? "rounded-bl-md bg-muted/80 text-foreground dark:bg-muted/60" : "rounded-br-md bg-gradient-to-br from-brand to-[oklch(0.78_0.16_155)] text-white"}`}
+                  >
+                    {m.content}
+                    <div
+                      className={`mt-1 text-[10px] ${!fromCustomer ? "text-white/70" : "text-muted-foreground"}`}
+                    >
+                      {m.senderName} · {formatMsgTime(m.timestamp)}
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })}
           </AnimatePresence>
+        )}
+        {customerTyping && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex justify-start"
+          >
+            <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-md bg-muted/80 px-4 py-3 shadow-sm dark:bg-muted/60">
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground/40 [animation-delay:-0.3s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground/40 [animation-delay:-0.15s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground/40" />
+              <span className="ml-1 text-[11px] text-muted-foreground">
+                {session.customerName.split(" ")[0]} is typing…
+              </span>
+            </div>
+          </motion.div>
         )}
         <div ref={bottomRef} />
       </div>
 
       {/* composer */}
-      <div className="border-t border-white/60 p-3">
+      <div className="border-t border-border p-3">
         {showCanned && (
-          <div className="mb-2 rounded-2xl bg-white/70 p-3">
+          <div className="mb-2 rounded-2xl bg-muted/60 p-3">
             <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Canned replies
             </div>
             <div className="space-y-1">
-              {cannedReplies.map((c, i) => (
+              {cannedReplies.map((c) => (
                 <button
-                  key={i}
+                  key={c.id}
                   onClick={() => {
-                    onPick(c);
+                    onPick(c.text);
                     setShowCanned(false);
                   }}
-                  className="block w-full rounded-lg px-2 py-1.5 text-left text-xs hover:bg-white"
+                  className="block w-full rounded-lg px-2 py-1.5 text-left text-xs hover:bg-muted"
                 >
-                  {c}
+                  {c.text}
                 </button>
               ))}
             </div>
           </div>
         )}
         <div className="glass-soft flex items-end gap-2 rounded-2xl p-2">
-          <button className="grid h-9 w-9 place-items-center rounded-xl text-foreground/60 hover:bg-white/70">
+          <button className="grid h-9 w-9 place-items-center rounded-xl text-foreground/60 hover:bg-muted/60">
             <Paperclip className="h-4 w-4" />
           </button>
           <button
             onClick={() => setShowCanned(!showCanned)}
-            className="flex h-9 items-center gap-1 rounded-xl px-2 text-xs font-medium text-foreground/70 hover:bg-white/70"
+            className="flex h-9 items-center gap-1 rounded-xl px-2 text-xs font-medium text-foreground/70 hover:bg-muted/60"
           >
             <FileText className="h-4 w-4" /> Canned <ChevronDown className="h-3 w-3" />
           </button>
@@ -543,7 +964,7 @@ function ChatPane({
             placeholder={`Reply to ${session.customerName.split(" ")[0]}…`}
             className="min-h-[36px] flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none"
           />
-          <button className="grid h-9 w-9 place-items-center rounded-xl text-foreground/60 hover:bg-white/70">
+          <button className="grid h-9 w-9 place-items-center rounded-xl text-foreground/60 hover:bg-muted/60">
             <Smile className="h-4 w-4" />
           </button>
           <button
@@ -583,18 +1004,18 @@ function ProfilePane({ session, onBack }: { session: ActiveSession | null; onBac
       {onBack && (
         <button
           onClick={onBack}
-          className="mb-3 flex items-center gap-1.5 rounded-xl px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-white/60 lg:hidden"
+          className="mb-3 flex items-center gap-1.5 rounded-xl px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-muted/60 lg:hidden"
         >
           <ArrowLeft className="h-3.5 w-3.5" /> Back to chat
         </button>
       )}
       <div className="flex flex-col items-center text-center">
         <div className="relative">
-          <span className="flex h-20 w-20 items-center justify-center rounded-3xl bg-brand/20 text-2xl font-bold text-brand ring-2 ring-white shadow-[0_10px_30px_-12px_rgba(87,184,92,0.6)]">
+          <span className="flex h-20 w-20 items-center justify-center rounded-3xl bg-brand/20 text-2xl font-bold text-brand ring-2 ring-white shadow-[0_10px_30px_-12px_rgba(87,184,92,0.6)] dark:ring-card">
             {initials}
           </span>
           {session.status === "Active" && (
-            <span className="absolute -bottom-1 -right-1 grid h-6 w-6 place-items-center rounded-full bg-brand text-[10px] font-bold text-white ring-2 ring-white">
+            <span className="absolute -bottom-1 -right-1 grid h-6 w-6 place-items-center rounded-full bg-brand text-[10px] font-bold text-white ring-2 ring-white dark:ring-card">
               ●
             </span>
           )}

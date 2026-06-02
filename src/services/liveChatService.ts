@@ -49,16 +49,14 @@ export const liveChatService = {
   getQueue: () => authFetch<QueueItem[]>("/api/livechat/queue"),
 
   /** Admin: all active sessions */
-  getActiveSessions: () =>
-    authFetch<ActiveSession[]>("/api/livechat/sessions/active"),
+  getActiveSessions: () => authFetch<ActiveSession[]>("/api/livechat/sessions/active"),
 
   /** Agent: sessions assigned to a specific agent */
   getAgentSessions: (agentId: string) =>
     authFetch<ActiveSession[]>(`/api/livechat/sessions/agent/${agentId}`),
 
   /** Public: single session (used for chatbot restore + agent detail view) */
-  getSession: (id: string) =>
-    authFetch<SessionDetail>(`/api/livechat/sessions/${id}`),
+  getSession: (id: string) => authFetch<SessionDetail>(`/api/livechat/sessions/${id}`),
 };
 
 // ── SignalR hub connection factory ─────────────────────────────────────────
@@ -74,6 +72,10 @@ export function createLiveChatHub(): signalR.HubConnection {
   return new signalR.HubConnectionBuilder()
     .withUrl(`${API_BASE}/hubs/livechat`, {
       accessTokenFactory: () => getJwt(),
+      // Auth is carried via the access_token query param, not cookies. The backend
+      // CORS policy uses a wildcard origin, which browsers reject when a request is
+      // sent with credentials. Disabling credentials lets the wildcard be accepted.
+      withCredentials: false,
     })
     .withAutomaticReconnect()
     .configureLogging(signalR.LogLevel.Warning)
@@ -84,43 +86,52 @@ export function createLiveChatHub(): signalR.HubConnection {
 
 export const HubEvents = {
   // → Agent
-  QueueUpdated:        "QueueUpdated",
-  SessionAssigned:     "SessionAssigned",
-  AgentStatusChanged:  "AgentStatusChanged",
-  SessionResolved:     "SessionResolved",
-  ChatTransferred:     "ChatTransferred",
-  WhisperReceived:     "WhisperReceived",
-  QueueEmpty:          "QueueEmpty",
+  QueueUpdated: "QueueUpdated",
+  SessionAssigned: "SessionAssigned",
+  AgentStatusChanged: "AgentStatusChanged",
+  SessionResolved: "SessionResolved",
+  ChatTransferred: "ChatTransferred",
+  WhisperReceived: "WhisperReceived",
+  QueueEmpty: "QueueEmpty",
 
   // → Customer
-  AgentJoined:         "AgentJoined",
-  ChatEnded:           "ChatEnded",
-  AgentTyping:         "AgentTyping",
-  AgentStoppedTyping:  "AgentStoppedTyping",
-  SupervisorJoined:    "SupervisorJoined",
+  AgentJoined: "AgentJoined",
+  ChatEnded: "ChatEnded",
+  AgentTyping: "AgentTyping",
+  AgentStoppedTyping: "AgentStoppedTyping",
+  SupervisorJoined: "SupervisorJoined",
+
+  // → Agent / Admin (customer is typing)
+  CustomerTyping: "CustomerTyping",
+  CustomerStoppedTyping: "CustomerStoppedTyping",
 
   // → Admin
-  AdminStateDump:      "AdminStateDump",
+  AdminStateDump: "AdminStateDump",
+  TicketCreated: "TicketCreated",
 
   // → Both
-  MessageReceived:     "MessageReceived",
+  MessageReceived: "MessageReceived",
 } as const;
 
 // ── Hub method name constants (→ server) ───────────────────────────────────
 
 export const HubMethods = {
+  // Shared
+  RejoinSession: "RejoinSession",
+
   // Agent methods
-  AgentConnect:        "AgentConnect",
-  AcceptNextChat:      "AcceptNextChat",
-  AgentSendMessage:    "AgentSendMessage",
-  AgentTyping:         "AgentTyping",
-  AgentStoppedTyping:  "AgentStoppedTyping",
-  ResolveChat:         "ResolveChat",
-  TransferChat:        "TransferChat",
-  UpdateStatus:        "UpdateStatus",
+  AgentConnect: "AgentConnect",
+  AcceptNextChat: "AcceptNextChat",
+  AgentSendMessage: "AgentSendMessage",
+  AgentTyping: "AgentTyping",
+  AgentStoppedTyping: "AgentStoppedTyping",
+  ResolveChat: "ResolveChat",
+  TransferChat: "TransferChat",
+  UpdateStatus: "UpdateStatus",
 
   // Admin methods
-  JoinAdminRoom:       "JoinAdminRoom",
-  WhisperToAgent:      "WhisperToAgent",
-  BargeIn:             "BargeIn",
+  JoinAdminRoom: "JoinAdminRoom",
+  WhisperToAgent: "WhisperToAgent",
+  BargeIn: "BargeIn",
+  SupervisorSendMessage: "SupervisorSendMessage",
 } as const;

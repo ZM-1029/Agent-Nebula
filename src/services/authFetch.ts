@@ -12,6 +12,27 @@ export function getJwt(): string {
   return localStorage.getItem(JWT_KEY) ?? "";
 }
 
+// ── Agent analytics types ──────────────────────────────────────────────────
+
+export interface AgentStat {
+  id: string;
+  name: string;
+  status: string;
+  sessionsHandled: number;
+  sessionsResolved: number;
+  resolutionRate: number;
+  avgCsat: number;
+  avgFirstReplySecs: number;
+  ticketsAssigned: number;
+}
+
+export interface VolumePoint {
+  date: string;
+  label: string;
+  total: number;
+  resolved: number;
+}
+
 export async function authFetch<T>(
   path: string,
   init?: RequestInit,

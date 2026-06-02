@@ -5,7 +5,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Bell, Volume2, Loader2, AlertCircle, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { api, type ApiNotification } from "@/services/api";
+import { notificationsService, type AppNotification } from "@/services/notificationsService";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 
@@ -15,8 +15,7 @@ export const Route = createFileRoute("/admin/notifications")({
       { title: "Notifications — Helix" },
       {
         name: "description",
-        content:
-          "Realtime alerts, system announcements and notification preferences.",
+        content: "Realtime alerts, system announcements and notification preferences.",
       },
     ],
   }),
@@ -29,11 +28,9 @@ type ToneKey = "warning" | "destructive" | "primary" | "blue";
 
 function toneForType(type: string): ToneKey {
   const t = type.toLowerCase();
-  if (t.includes("offline") || t.includes("error") || t.includes("breach"))
-    return "destructive";
+  if (t.includes("offline") || t.includes("error") || t.includes("breach")) return "destructive";
   if (t.includes("transfer") || t.includes("escalat")) return "warning";
-  if (t.includes("newchat") || t.includes("new_chat") || t.includes("assign"))
-    return "primary";
+  if (t.includes("newchat") || t.includes("new_chat") || t.includes("assign")) return "primary";
   return "blue";
 }
 
@@ -51,13 +48,9 @@ function friendlyTitle(type: string): string {
     ChatTransferred: "Chat Transferred",
     AgentOffline: "Agent Offline",
     AgentOnline: "Agent Online",
+    SLABreach: "SLA Breach",
   };
-  return (
-    map[type] ??
-    type
-      .replace(/([A-Z])/g, " $1")
-      .trim()
-  );
+  return map[type] ?? type.replace(/([A-Z])/g, " $1").trim();
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -72,18 +65,18 @@ function NotifPage() {
     refetch,
   } = useQuery({
     queryKey: ["notifications"],
-    queryFn: api.getNotifications,
+    queryFn: notificationsService.getAll,
     refetchInterval: 30_000, // poll every 30 s
   });
 
   const markReadMutation = useMutation({
-    mutationFn: (id: string) => api.markNotificationRead(id),
+    mutationFn: (id: string) => notificationsService.markRead(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
     onError: () => toast.error("Failed to mark notification as read"),
   });
 
   const markAllMutation = useMutation({
-    mutationFn: api.markAllNotificationsRead,
+    mutationFn: notificationsService.markAllRead,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["notifications"] });
       toast.success("All notifications marked as read");
@@ -166,7 +159,7 @@ function NotifPage() {
           {/* Notification list */}
           {!isLoading && !isError && (notifications?.length ?? 0) > 0 && (
             <div className="divide-y divide-border/40 max-h-[520px] overflow-y-auto">
-              {notifications!.map((n: ApiNotification) => {
+              {notifications!.map((n: AppNotification) => {
                 const tone = toneForType(n.type);
                 return (
                   <button

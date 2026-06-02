@@ -3,7 +3,7 @@ import { GlassCard } from "@/components/admin/glass-card";
 import { Button } from "@/components/ui/button";
 import { agentsService } from "@/services/agentsService";
 import { ticketsService } from "@/services/ticketsService";
-import { ArrowLeft, MessageSquare, UserCog, Flag, Mail, Loader2 } from "lucide-react";
+import { ArrowLeft, Mail, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Table,
@@ -145,17 +145,6 @@ function AgentDetailPage() {
                 {agent.email}
               </span>
             </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm">
-              <MessageSquare className="h-4 w-4" /> Message
-            </Button>
-            <Button variant="outline" size="sm">
-              <UserCog className="h-4 w-4" /> Reassign
-            </Button>
-            <Button variant="outline" size="sm" className="text-destructive">
-              <Flag className="h-4 w-4" /> Flag
-            </Button>
           </div>
         </div>
       </GlassCard>

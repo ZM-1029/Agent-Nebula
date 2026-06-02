@@ -2,16 +2,21 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { motion } from "framer-motion";
 import {
   LayoutDashboard, MessagesSquare, Users,
-  BarChart3, Settings, ChevronLeft, Headphones, ClipboardList,
+  BarChart3, Settings, ChevronLeft, Headphones, ClipboardList, Ticket,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useQuery } from "@tanstack/react-query";
+import { liveChatService } from "@/services/liveChatService";
+import { agentsService } from "@/services/agentsService";
+import { ticketsService } from "@/services/ticketsService";
 
-const nav = [
-  { to: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true },
-  { to: "/admin/chats", label: "Live Chats", icon: MessagesSquare, badge: "12" },
-  { to: "/admin/agents", label: "Agents", icon: Users },
-  { to: "/admin/analytics", label: "Analytics", icon: BarChart3 },
-  { to: "/admin/records", label: "Records", icon: ClipboardList },
+const navItems = [
+  { to: "/admin",           label: "Dashboard",  icon: LayoutDashboard, exact: true },
+  { to: "/admin/chats",     label: "Live Chats", icon: MessagesSquare,  countKey: "live" },
+  { to: "/admin/agents",    label: "Agents",     icon: Users,           countKey: "agents" },
+  { to: "/admin/tickets",   label: "Tickets",    icon: Ticket,          countKey: "tickets" },
+  { to: "/admin/analytics", label: "Analytics",  icon: BarChart3 },
+  { to: "/admin/records",   label: "Records",    icon: ClipboardList },
 ];
 
 const bottom = [
@@ -29,6 +34,33 @@ export function AppSidebar({ collapsed, onToggle, variant = "desktop", onNavigat
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isMobile = variant === "mobile";
   const showLabel = isMobile || !collapsed;
+
+  const { data: activeSessions = [] } = useQuery({
+    queryKey: ["admin-sessions"],
+    queryFn: () => liveChatService.getActiveSessions(),
+    refetchInterval: 15_000,
+    retry: 1,
+  });
+
+  const { data: agents = [] } = useQuery({
+    queryKey: ["agents"],
+    queryFn: () => agentsService.getAll(),
+    refetchInterval: 30_000,
+    retry: 1,
+  });
+
+  const { data: tickets = [] } = useQuery({
+    queryKey: ["tickets"],
+    queryFn: () => ticketsService.getAll(),
+    refetchInterval: 30_000,
+    retry: 1,
+  });
+
+  const counts: Record<string, number> = {
+    live:    activeSessions.length,
+    agents:  agents.filter((a) => a.status.toLowerCase() === "online").length,
+    tickets: tickets.filter((t) => t.status.toLowerCase() === "open").length,
+  };
 
   const content = (
     <>
@@ -53,8 +85,10 @@ export function AppSidebar({ collapsed, onToggle, variant = "desktop", onNavigat
       </div>
 
       <nav className="scrollbar-thin flex-1 space-y-1 overflow-y-auto overflow-x-hidden">
-        {nav.map((item) => {
+        {navItems.map((item) => {
           const active = item.exact ? pathname === item.to : pathname === item.to || pathname.startsWith(item.to + "/");
+          const count = item.countKey ? counts[item.countKey] : 0;
+          const badge = count > 0 ? String(count) : undefined;
           return (
             <Link
               key={item.to}
@@ -78,9 +112,9 @@ export function AppSidebar({ collapsed, onToggle, variant = "desktop", onNavigat
               {showLabel && (
                 <>
                   <span className="relative z-10 flex-1 truncate">{item.label}</span>
-                  {item.badge && (
+                  {badge && (
                     <span className="relative z-10 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold text-primary">
-                      {item.badge}
+                      {badge}
                     </span>
                   )}
                 </>

@@ -1,5 +1,4 @@
 const BASE = "http://150.241.246.64:588/api/dashboard";
-const NOTIF_BASE = "http://150.241.246.64:588/api/notifications";
 
 export interface EndpointBreakdownItem {
   endpoint: string;
@@ -111,16 +110,6 @@ export interface OrderDetail {
   deliveryPoint: string;
 }
 
-// ── Notification types (matches NotificationController) ──────────────────────
-
-export interface ApiNotification {
-  id: string;          // Guid as string
-  type: string;        // e.g. "NewChat", "ChatTransferred", "AgentOffline"
-  message: string;
-  isRead: boolean;
-  createdAt: string;   // ISO datetime string
-}
-
 // ── Generic fetch helpers ─────────────────────────────────────────────────────
 
 async function get<T>(path: string): Promise<T> {
@@ -129,53 +118,14 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-function authHeaders(): HeadersInit {
-  // Pull bearer token from localStorage (set by use-auth.tsx on login)
-  const raw = localStorage.getItem("frankie_session");
-  try {
-    const parsed = raw ? JSON.parse(raw) : null;
-    const token: string | undefined = parsed?.token;
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  } catch {
-    return {};
-  }
-}
-
-async function notifFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${NOTIF_BASE}${path}`, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...authHeaders(), ...options?.headers },
-  });
-  if (!res.ok) throw new Error(`Notifications API ${res.status}: ${res.statusText}`);
-  // PUT endpoints return 200 with no body
-  const text = await res.text();
-  return (text ? JSON.parse(text) : undefined) as T;
-}
-
 // ── Public API surface ────────────────────────────────────────────────────────
 
 export const api = {
   // Dashboard
-  getStats: (date?: string) =>
-    get<DashboardStats>(`/stats${date ? `?date=${date}` : ""}`),
-  getHistory: (days = 7) =>
-    get<DailyHistory[]>(`/history?days=${days}`),
-  getHourly: (date?: string) =>
-    get<HourlyData[]>(`/hourly${date ? `?date=${date}` : ""}`),
+  getStats: (date?: string) => get<DashboardStats>(`/stats${date ? `?date=${date}` : ""}`),
+  getHistory: (days = 7) => get<DailyHistory[]>(`/history?days=${days}`),
+  getHourly: (date?: string) => get<HourlyData[]>(`/hourly${date ? `?date=${date}` : ""}`),
   getLogs: (date?: string, limit = 200) =>
     get<LogEntry[]>(`/logs?${date ? `date=${date}&` : ""}limit=${limit}`),
-  getAvailableDates: () =>
-    get<string[]>("/available-dates"),
-
-  // Notifications  — GET /api/notifications
-  getNotifications: () =>
-    notifFetch<ApiNotification[]>(""),
-
-  // Mark single read — PUT /api/notifications/{id}/read
-  markNotificationRead: (id: string) =>
-    notifFetch<void>(`/${id}/read`, { method: "PUT" }),
-
-  // Mark all read  — PUT /api/notifications/read-all
-  markAllNotificationsRead: () =>
-    notifFetch<void>("/read-all", { method: "PUT" }),
+  getAvailableDates: () => get<string[]>("/available-dates"),
 };

@@ -18,6 +18,13 @@ export interface Ticket {
   assignedAgent: { id: string; name: string } | null;
 }
 
+export interface TicketNote {
+  id: string;
+  content: string;
+  authorName: string;
+  createdAt: string;
+}
+
 export interface TicketDetail extends Ticket {
   messages: {
     senderType: string;
@@ -25,6 +32,7 @@ export interface TicketDetail extends Ticket {
     content: string;
     timestamp: string;
   }[];
+  notes: TicketNote[];
 }
 
 export interface UpdateTicketBody {
@@ -64,4 +72,11 @@ export const ticketsService = {
       `/api/tickets/${id}`,
       { method: "PUT", body: JSON.stringify(body) },
     ),
+
+  /** Add an internal note to a ticket */
+  addNote: (id: string, content: string) =>
+    authFetch<TicketNote>(`/api/tickets/${id}/notes`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    }),
 };

@@ -152,6 +152,10 @@
     backdrop-filter: blur(14px);
     border: 1px solid rgba(255,255,255,0.75);
   }
+  .dark .glass-soft {
+    background: rgba(255,255,255,0.06);
+    border-color: rgba(255,255,255,0.1);
+  }
   .glow-green { box-shadow: var(--glow-green); }
   .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
   .scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 9999px; }

@@ -2,6 +2,7 @@ import { createFileRoute, Link, Outlet, useNavigate, useRouterState } from "@tan
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { GlassCard } from "@/components/admin/glass-card";
 import { agentsService, type Agent } from "@/services/agentsService";
+import { liveChatService } from "@/services/liveChatService";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,17 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Plus,
-  Search,
-  ChevronRight,
-  MessageSquare,
-  Upload,
-  RefreshCw,
-  Eye,
-  EyeOff,
-  Loader2,
-} from "lucide-react";
+import { Plus, Search, ChevronRight, Upload, RefreshCw, Eye, EyeOff, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
@@ -82,9 +73,25 @@ function AgentsPage() {
     retry: 1,
   });
 
+  // Live active-session list — used to derive each agent's current chat count.
+  const { data: activeSessions = [] } = useQuery({
+    queryKey: ["admin-sessions"],
+    queryFn: () => liveChatService.getActiveSessions(),
+    retry: 1,
+    refetchInterval: 30_000,
+  });
+
   if (pathname.startsWith("/admin/agents/")) {
     return <Outlet />;
   }
+
+  // agentId → number of currently active chats
+  const chatCounts = activeSessions.reduce<Record<string, number>>((acc, s) => {
+    if (s.agentId && s.status.toLowerCase() === "active") {
+      acc[s.agentId] = (acc[s.agentId] ?? 0) + 1;
+    }
+    return acc;
+  }, {});
 
   const list = agents.filter(
     (a) =>
@@ -166,6 +173,7 @@ function AgentsPage() {
                 <TableHead className="pl-4">Agent</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Role</TableHead>
+                <TableHead className="text-center">Active chats</TableHead>
                 <TableHead>Last seen</TableHead>
                 <TableHead className="pr-4 text-right">Actions</TableHead>
               </TableRow>
@@ -174,7 +182,7 @@ function AgentsPage() {
               {isLoading ? (
                 <TableRow>
                   <TableCell
-                    colSpan={5}
+                    colSpan={6}
                     className="py-10 text-center text-sm text-muted-foreground"
                   >
                     <Loader2 className="mx-auto h-5 w-5 animate-spin" />
@@ -183,7 +191,7 @@ function AgentsPage() {
               ) : list.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={5}
+                    colSpan={6}
                     className="py-10 text-center text-sm text-muted-foreground"
                   >
                     No agents match your filters.
@@ -241,22 +249,20 @@ function AgentsPage() {
                       </span>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{a.role}</TableCell>
+                    <TableCell className="text-center">
+                      {chatCounts[a.id] ? (
+                        <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-primary/15 px-2 py-0.5 text-xs font-semibold text-primary">
+                          {chatCounts[a.id]}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">0</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-[11px] text-muted-foreground">
                       {a.lastSeenAt ? new Date(a.lastSeenAt).toLocaleString() : "—"}
                     </TableCell>
                     <TableCell className="pr-4">
                       <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={(e) => e.stopPropagation()}
-                          title={`Message ${a.name}`}
-                          asChild
-                        >
-                          <Link to="/admin/chats" search={{ agent: a.id }}>
-                            <MessageSquare className="h-4 w-4" />
-                          </Link>
-                        </Button>
                         <Button
                           variant="ghost"
                           size="sm"

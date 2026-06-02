@@ -12,7 +12,10 @@ export const Route = createFileRoute("/admin/records")({
   head: () => ({
     meta: [
       { title: "Records — Frankie Admin" },
-      { name: "description", content: "Customer interaction log — all delivery enquiries per day." },
+      {
+        name: "description",
+        content: "Customer interaction log — all delivery enquiries per day.",
+      },
     ],
   }),
   component: RecordsPage,
@@ -23,37 +26,42 @@ type SortKey = keyof Pick<LogEntry, "date" | "time" | "endpoint" | "reference" |
 // Human-friendly action labels for business users
 function actionLabel(ep: string): string {
   const map: Record<string, string> = {
-    "track":        "Track Order",
-    "confirm":      "Confirm Delivery",
-    "decline":      "Decline Delivery",
-    "instructions": "Get Instructions",
-    "note":         "Leave Note",
-    "send-otp":     "Identity Verify",
-    "verify-otp":   "Identity Verify",
+    track: "Track Order",
+    confirm: "Confirm Delivery",
+    decline: "Decline Delivery",
+    instructions: "Get Instructions",
+    note: "Leave Note",
+    "send-otp": "Identity Verify",
+    "verify-otp": "Identity Verify",
   };
   return map[ep] ?? ep;
 }
 
 function actionColor(ep: string): string {
-  if (ep === "confirm")      return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
-  if (ep === "decline")      return "bg-red-500/10 text-red-700 dark:text-red-400";
-  if (ep === "track")        return "bg-blue-500/10 text-blue-700 dark:text-blue-400";
+  if (ep === "confirm") return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+  if (ep === "decline") return "bg-red-500/10 text-red-700 dark:text-red-400";
+  if (ep === "track") return "bg-blue-500/10 text-blue-700 dark:text-blue-400";
   if (ep === "instructions") return "bg-amber-500/10 text-amber-700 dark:text-amber-400";
-  if (ep === "note")         return "bg-muted text-muted-foreground";
+  if (ep === "note") return "bg-muted text-muted-foreground";
   return "bg-primary/10 text-primary";
 }
 
 function resultLabel(entry: LogEntry): { text: string; cls: string } {
-  if (entry.dataFound === true)  return { text: "Found",     cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" };
-  if (entry.dataFound === false) return { text: "Not Found", cls: "bg-red-500/15 text-red-700 dark:text-red-400" };
-  if (entry.endpoint === "confirm") return { text: "Confirmed", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" };
-  if (entry.endpoint === "decline") return { text: "Declined",  cls: "bg-red-500/15 text-red-700 dark:text-red-400" };
-  if (entry.isSuccess) return { text: "OK",    cls: "bg-blue-500/15 text-blue-600 dark:text-blue-400" };
-  return                      { text: "Failed", cls: "bg-red-500/15 text-red-600 dark:text-red-400" };
+  if (entry.dataFound === true)
+    return { text: "Found", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" };
+  if (entry.dataFound === false)
+    return { text: "Not Found", cls: "bg-red-500/15 text-red-700 dark:text-red-400" };
+  if (entry.endpoint === "confirm")
+    return { text: "Confirmed", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" };
+  if (entry.endpoint === "decline")
+    return { text: "Declined", cls: "bg-red-500/15 text-red-700 dark:text-red-400" };
+  if (entry.isSuccess)
+    return { text: "OK", cls: "bg-blue-500/15 text-blue-600 dark:text-blue-400" };
+  return { text: "Failed", cls: "bg-red-500/15 text-red-600 dark:text-red-400" };
 }
 
 function rowTone(entry: LogEntry): string {
-  if (entry.endpoint === "confirm" || entry.dataFound === true)  return "hover:bg-emerald-500/5";
+  if (entry.endpoint === "confirm" || entry.dataFound === true) return "hover:bg-emerald-500/5";
   if (entry.endpoint === "decline" || entry.dataFound === false) return "hover:bg-red-500/5";
   return "hover:bg-accent/40";
 }
@@ -130,18 +138,30 @@ function RecordsPage() {
   }
 
   function SortIcon({ col }: { col: SortKey }) {
-    if (sortKey !== col) return <span className="ml-1 opacity-30"><ChevronUp className="inline h-3 w-3 -mb-0.5" /></span>;
-    return sortDir === "asc"
-      ? <ChevronUp className="inline ml-1 h-3 w-3 text-primary" />
-      : <ChevronDown className="inline ml-1 h-3 w-3 text-primary" />;
+    if (sortKey !== col)
+      return (
+        <span className="ml-1 opacity-30">
+          <ChevronUp className="inline h-3 w-3 -mb-0.5" />
+        </span>
+      );
+    return sortDir === "asc" ? (
+      <ChevronUp className="inline ml-1 h-3 w-3 text-primary" />
+    ) : (
+      <ChevronDown className="inline ml-1 h-3 w-3 text-primary" />
+    );
   }
 
   const th = (label: string, col?: SortKey, extraCls?: string) => (
     <th
-      className={cn("p-2 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground whitespace-nowrap", col && "cursor-pointer select-none hover:text-foreground", extraCls)}
+      className={cn(
+        "p-2 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground whitespace-nowrap",
+        col && "cursor-pointer select-none hover:text-foreground",
+        extraCls,
+      )}
       onClick={col ? () => toggleSort(col) : undefined}
     >
-      {label}{col && <SortIcon col={col} />}
+      {label}
+      {col && <SortIcon col={col} />}
     </th>
   );
 
@@ -151,7 +171,9 @@ function RecordsPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Records</h1>
-          <p className="text-sm text-muted-foreground">All customer interactions — delivery enquiries, confirmations and declines.</p>
+          <p className="text-sm text-muted-foreground">
+            All customer interactions — delivery enquiries, confirmations and declines.
+          </p>
         </div>
         <button
           onClick={exportCsv}
@@ -170,11 +192,15 @@ function RecordsPage() {
             onChange={(e) => setSelectedDate(e.target.value)}
             className="bg-transparent text-sm outline-none"
           >
-            <option value={today}>{today} (today)</option>
+            <option value={today} className="bg-popover text-popover-foreground">
+              {today} (today)
+            </option>
             {(availableDates ?? [])
               .filter((d) => d !== today)
               .map((d) => (
-                <option key={d} value={d}>{d}</option>
+                <option key={d} value={d} className="bg-popover text-popover-foreground">
+                  {d}
+                </option>
               ))}
           </select>
         </div>
@@ -215,9 +241,17 @@ function RecordsPage() {
             </thead>
             <tbody>
               {isLoading ? (
-                <tr><td colSpan={8} className="p-8 text-center text-sm text-muted-foreground">Loading…</td></tr>
+                <tr>
+                  <td colSpan={8} className="p-8 text-center text-sm text-muted-foreground">
+                    Loading…
+                  </td>
+                </tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={8} className="p-8 text-center text-sm text-muted-foreground">No records for {selectedDate}</td></tr>
+                <tr>
+                  <td colSpan={8} className="p-8 text-center text-sm text-muted-foreground">
+                    No records for {selectedDate}
+                  </td>
+                </tr>
               ) : (
                 filtered.map((l, i) => {
                   const { text: resText, cls: resCls } = resultLabel(l);
@@ -227,7 +261,12 @@ function RecordsPage() {
                       <td className="p-2 text-xs whitespace-nowrap w-28">{l.date}</td>
                       <td className="p-2 text-xs font-mono whitespace-nowrap w-20">{l.time}</td>
                       <td className="p-2 w-36">
-                        <span className={cn("rounded-md px-2 py-0.5 text-[11px] font-medium whitespace-nowrap", actionColor(l.endpoint))}>
+                        <span
+                          className={cn(
+                            "rounded-md px-2 py-0.5 text-[11px] font-medium whitespace-nowrap",
+                            actionColor(l.endpoint),
+                          )}
+                        >
                           {actionLabel(l.endpoint)}
                         </span>
                       </td>
@@ -240,7 +279,9 @@ function RecordsPage() {
                         {l.postcode ?? <span className="text-muted-foreground">—</span>}
                       </td>
                       <td className="p-2 w-24">
-                        <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", resCls)}>
+                        <span
+                          className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", resCls)}
+                        >
                           {resText}
                         </span>
                       </td>
@@ -264,12 +305,7 @@ function RecordsPage() {
         </div>
       </GlassCard>
 
-      {activeRow && (
-        <OrderDetailModal
-          entry={activeRow}
-          onClose={() => setActiveRow(null)}
-        />
-      )}
+      {activeRow && <OrderDetailModal entry={activeRow} onClose={() => setActiveRow(null)} />}
     </div>
   );
 }

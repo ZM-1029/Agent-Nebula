@@ -1,19 +1,15 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { GlassCard } from "@/components/admin/glass-card";
 import { Button } from "@/components/ui/button";
 import {
   Eye,
   Lock,
   Megaphone,
-  Flag,
-  UserCog,
   Globe,
   Activity,
   Send,
   AlertTriangle,
   ShieldAlert,
-  UserCircle2,
-  X,
   Loader2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -27,13 +23,9 @@ import {
   HubMethods,
   type ChatMessage,
 } from "@/services/liveChatService";
-import { agentsService, type Agent } from "@/services/agentsService";
 import type * as signalR from "@microsoft/signalr";
 
 export const Route = createFileRoute("/admin/chats")({
-  validateSearch: (search: Record<string, unknown>) => ({
-    agent: typeof search.agent === "string" ? search.agent : undefined,
-  }),
   head: () => ({
     meta: [
       { title: "Live Chats — Admin Console" },
@@ -72,7 +64,6 @@ function formatTs(iso: string) {
 }
 
 function ChatsPage() {
-  const { agent: agentParam } = Route.useSearch();
   const queryClient = useQueryClient();
 
   const { data: sessions = [], isLoading: sessionsLoading } = useQuery({
@@ -80,12 +71,6 @@ function ChatsPage() {
     queryFn: () => liveChatService.getActiveSessions(),
     retry: 1,
     refetchInterval: 30_000,
-  });
-
-  const { data: allAgents = [] } = useQuery({
-    queryKey: ["agents"],
-    queryFn: () => agentsService.getAll(),
-    retry: 1,
   });
 
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -97,10 +82,12 @@ function ChatsPage() {
   const [hubStatus, setHubStatus] = useState<"connecting" | "connected" | "disconnected">(
     "connecting",
   );
+  const [typingActor, setTypingActor] = useState<"agent" | "customer" | null>(null);
   // tick forces a re-render every second so durations stay live
   const [, setTick] = useState(0);
   const hubRef = useRef<signalR.HubConnection | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => setTick((x) => x + 1), 1000);
@@ -117,6 +104,8 @@ function ChatsPage() {
     hub.onclose(() => setHubStatus("disconnected"));
 
     hub.on(HubEvents.MessageReceived, (msg: ChatMessage) => {
+      // A delivered message clears the matching typing indicator.
+      setTypingActor(null);
       setMessages((prev) => {
         if (prev.some((m) => m.timestamp === msg.timestamp && m.content === msg.content))
           return prev;
@@ -131,6 +120,18 @@ function ChatsPage() {
         50,
       );
     });
+
+    // Typing indicators (admin observes both sides). Auto-clear after 4s so a
+    // dropped "stopped" event can't leave the dots stuck on.
+    const flagTyping = (who: "agent" | "customer") => {
+      setTypingActor(who);
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = setTimeout(() => setTypingActor(null), 4000);
+    };
+    hub.on(HubEvents.AgentTyping, () => flagTyping("agent"));
+    hub.on(HubEvents.AgentStoppedTyping, () => setTypingActor(null));
+    hub.on(HubEvents.CustomerTyping, () => flagTyping("customer"));
+    hub.on(HubEvents.CustomerStoppedTyping, () => setTypingActor(null));
 
     hub.on(HubEvents.QueueUpdated, () => {
       queryClient.invalidateQueries({ queryKey: ["admin-sessions"] });
@@ -165,6 +166,7 @@ function ChatsPage() {
   // Load messages when active session changes
   useEffect(() => {
     if (!activeId) return;
+    setTypingActor(null);
     setMessagesLoading(true);
     liveChatService
       .getSession(activeId)
@@ -172,6 +174,14 @@ function ChatsPage() {
       .catch(() => setMessages([]))
       .finally(() => setMessagesLoading(false));
   }, [activeId]);
+
+  // Join the open session's SignalR group so the admin receives live messages
+  // and typing while merely viewing (not just after Barge-in). Groups are
+  // per-connection, so re-run on every (re)connect and when switching chats.
+  useEffect(() => {
+    if (!activeId || hubStatus !== "connected") return;
+    hubRef.current?.invoke(HubMethods.RejoinSession, activeId).catch(() => {});
+  }, [activeId, hubStatus]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -181,12 +191,6 @@ function ChatsPage() {
     });
   }, [messages]);
 
-  // Conditional render AFTER all hooks
-  const taggedAgent = agentParam ? allAgents.find((a) => a.id === agentParam) : undefined;
-  if (taggedAgent) {
-    return <AgentDirectMessage agent={taggedAgent} />;
-  }
-
   const active = sessions.find((s) => s.id === activeId) ?? null;
   const isBarged = activeId ? !!barged[activeId] : false;
   const publicMessages = messages.filter((m) => !m.isWhisper);
@@ -194,8 +198,17 @@ function ChatsPage() {
 
   const handleWhisper = async () => {
     if (!whisper.trim() || !activeId || !active) return;
+    if (!active.agentId) {
+      toast.error("No agent assigned to whisper to.");
+      return;
+    }
     try {
-      await hubRef.current?.invoke(HubMethods.WhisperToAgent, activeId, whisper.trim());
+      await hubRef.current?.invoke(
+        HubMethods.WhisperToAgent,
+        activeId,
+        active.agentId,
+        whisper.trim(),
+      );
       setWhisper("");
       toast.success(`Whisper sent to ${active.agentName ?? "agent"}`);
     } catch {
@@ -223,7 +236,7 @@ function ChatsPage() {
   const handleSend = async () => {
     if (!reply.trim() || !activeId) return;
     try {
-      await hubRef.current?.invoke(HubMethods.AgentSendMessage, activeId, reply.trim());
+      await hubRef.current?.invoke(HubMethods.SupervisorSendMessage, activeId, reply.trim());
       setReply("");
     } catch {
       toast.error("Failed to send message");
@@ -408,6 +421,21 @@ function ChatsPage() {
                         </div>
                       </div>
                     ))}
+                    {typingActor && (
+                      <div className="flex justify-start">
+                        <div className="flex items-center gap-1.5 rounded-2xl border border-border bg-background/60 px-3.5 py-2.5">
+                          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:-0.3s]" />
+                          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50 [animation-delay:-0.15s]" />
+                          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/50" />
+                          <span className="ml-1 text-[11px] text-muted-foreground">
+                            {typingActor === "customer"
+                              ? active.customerName
+                              : (active.agentName ?? "Agent")}{" "}
+                            is typing…
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -556,22 +584,6 @@ function ChatsPage() {
                   >
                     <ShieldAlert className="mr-1 h-3 w-3" /> Barge
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-[11px]"
-                    onClick={() => toast.success("Reassignment opened")}
-                  >
-                    <UserCog className="mr-1 h-3 w-3" /> Reassign
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-[11px]"
-                    onClick={() => toast.success("Flagged for review")}
-                  >
-                    <Flag className="mr-1 h-3 w-3" /> Flag
-                  </Button>
                 </div>
               </div>
 
@@ -592,184 +604,6 @@ function ChatsPage() {
               </div>
             </>
           )}
-        </GlassCard>
-      </div>
-    </div>
-  );
-}
-
-function AgentDirectMessage({ agent }: { agent: Agent }) {
-  const [thread, setThread] = useState<
-    { id: number; from: "admin" | "agent"; text: string; ts: string }[]
-  >([
-    { id: 1, from: "agent", text: `Hi! This is ${agent.name}. How can I help?`, ts: "9:02 AM" },
-    {
-      id: 2,
-      from: "admin",
-      text: "Quick check-in on your active queue — any blockers?",
-      ts: "9:04 AM",
-    },
-    { id: 3, from: "agent", text: "All good. Working through the queue now.", ts: "9:05 AM" },
-  ]);
-  const [draft, setDraft] = useState("");
-  const endRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [thread.length]);
-
-  const send = () => {
-    if (!draft.trim()) return;
-    setThread((t) => [...t, { id: t.length + 1, from: "admin", text: draft.trim(), ts: "now" }]);
-    setDraft("");
-    toast.success(`Message sent to ${agent.name}`);
-  };
-
-  const statusLower = agent.status.toLowerCase();
-  const statusDot =
-    statusLower === "online"
-      ? "bg-emerald-500"
-      : statusLower === "busy"
-        ? "bg-amber-500"
-        : statusLower === "away"
-          ? "bg-amber-400"
-          : "bg-muted-foreground";
-
-  return (
-    <div className="flex flex-col gap-3 h-[calc(100vh-110px)]">
-      <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/30 bg-primary/10 px-4 py-2.5">
-        <div className="flex items-center gap-3">
-          <span className="flex h-9 w-9 items-center justify-center rounded-full gradient-primary text-[11px] font-semibold text-primary-foreground">
-            {initials(agent.name)}
-          </span>
-          <div>
-            <p className="text-[10px] uppercase tracking-wide text-primary/80 font-semibold flex items-center gap-1">
-              <UserCircle2 className="h-3 w-3" /> Agent profile
-            </p>
-            <p className="text-sm font-semibold leading-tight">
-              Messaging {agent.name}
-              <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-                • {agent.role}
-              </span>
-            </p>
-          </div>
-        </div>
-        <Button asChild variant="ghost" size="sm">
-          <Link to="/admin/chats" search={{ agent: undefined }}>
-            <X className="h-3.5 w-3.5" /> Clear
-          </Link>
-        </Button>
-      </div>
-
-      <div className="grid flex-1 min-h-0 gap-4 lg:grid-cols-[1fr_320px]">
-        <GlassCard className="flex max-h-[70vh] flex-col overflow-hidden p-0 lg:max-h-none">
-          <div className="flex items-center justify-between border-b border-border/60 p-4">
-            <div className="flex items-center gap-3">
-              <span className="relative flex h-10 w-10 items-center justify-center rounded-full gradient-primary text-xs font-semibold text-primary-foreground">
-                {initials(agent.name)}
-                <span
-                  className={cn(
-                    "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background",
-                    statusDot,
-                  )}
-                />
-              </span>
-              <div>
-                <p className="text-sm font-semibold">{agent.name}</p>
-                <p className="text-[11px] text-muted-foreground capitalize">
-                  {statusLower} · {agent.role}
-                </p>
-              </div>
-            </div>
-            <span className="rounded-full bg-primary/15 px-2.5 py-1 text-[10px] font-semibold text-primary">
-              Direct message
-            </span>
-          </div>
-
-          <div className="scrollbar-thin flex-1 space-y-3 overflow-y-auto p-4">
-            {thread.map((m) => (
-              <div
-                key={m.id}
-                className={cn("flex", m.from === "admin" ? "justify-end" : "justify-start")}
-              >
-                <div
-                  className={cn(
-                    "max-w-[70%] rounded-2xl px-3.5 py-2 text-sm",
-                    m.from === "admin"
-                      ? "gradient-primary text-primary-foreground"
-                      : "border border-border bg-background/60",
-                  )}
-                >
-                  <p>{m.text}</p>
-                  <p
-                    className={cn(
-                      "mt-1 text-[10px]",
-                      m.from === "admin" ? "text-primary-foreground/70" : "text-muted-foreground",
-                    )}
-                  >
-                    {m.ts}
-                  </p>
-                </div>
-              </div>
-            ))}
-            <div ref={endRef} />
-          </div>
-
-          <div className="border-t border-border/60 p-4">
-            <div className="flex items-center gap-2 rounded-2xl border border-border bg-background/60 p-2 focus-within:border-primary">
-              <input
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") send();
-                }}
-                placeholder={`Message ${agent.name}…`}
-                className="h-9 flex-1 border-0 bg-transparent px-2 text-sm outline-none placeholder:text-muted-foreground"
-              />
-              <Button onClick={send} className="h-9 gradient-primary text-primary-foreground">
-                <Send className="mr-1 h-3.5 w-3.5" /> Send
-              </Button>
-            </div>
-            <p className="mt-1.5 px-1 text-[10px] text-muted-foreground">
-              Direct admin-to-agent chat. Customers do not see these messages.
-            </p>
-          </div>
-        </GlassCard>
-
-        <GlassCard className="scrollbar-thin overflow-y-auto">
-          <div className="text-center">
-            <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full gradient-primary text-base font-semibold text-primary-foreground">
-              {initials(agent.name)}
-            </span>
-            <p className="mt-2 text-sm font-semibold">{agent.name}</p>
-            <p className="text-xs text-muted-foreground">{agent.role}</p>
-          </div>
-          <div className="mt-4 grid grid-cols-2 gap-2 text-center">
-            <div className="rounded-lg bg-background/60 p-2">
-              <p className="text-[9px] uppercase text-muted-foreground">Status</p>
-              <p className="text-xs font-semibold capitalize">{statusLower}</p>
-            </div>
-            <div className="rounded-lg bg-background/60 p-2">
-              <p className="text-[9px] uppercase text-muted-foreground">Active chats</p>
-              <p className="text-xs font-semibold">{agent.activeChats ?? "—"}</p>
-            </div>
-            <div className="col-span-2 rounded-lg bg-background/60 p-2">
-              <p className="text-[9px] uppercase text-muted-foreground">Last seen</p>
-              <p className="text-xs font-semibold">
-                {agent.lastSeenAt
-                  ? new Date(agent.lastSeenAt).toLocaleString([], {
-                      dateStyle: "short",
-                      timeStyle: "short",
-                    })
-                  : "—"}
-              </p>
-            </div>
-          </div>
-          <Button asChild variant="outline" size="sm" className="mt-4 w-full">
-            <Link to="/admin/agents/$agentId" params={{ agentId: agent.id }}>
-              View full profile
-            </Link>
-          </Button>
         </GlassCard>
       </div>
     </div>

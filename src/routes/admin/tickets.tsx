@@ -1,12 +1,13 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { createFileRoute, Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { GlassCard } from "@/components/admin/glass-card";
 import { ticketsService } from "@/services/ticketsService";
+import { createLiveChatHub, HubEvents, HubMethods } from "@/services/liveChatService";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Search, Filter, ArrowUpDown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export const Route = createFileRoute("/admin/tickets")({
   head: () => ({
@@ -55,12 +56,40 @@ function TicketsPage() {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<string>("all");
 
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+
+  // When on a child route (e.g. /admin/tickets/$ticketId), render the child
+  if (pathname.startsWith("/admin/tickets/")) {
+    return <Outlet />;
+  }
+
   const { data: tickets = [], isLoading } = useQuery({
     queryKey: ["tickets"],
     queryFn: () => ticketsService.getAll(),
     retry: 1,
     refetchInterval: 30_000,
   });
+
+  // Live updates: refresh the list the instant a ticket is created (chat
+  // ended/resolved) or a session is resolved, instead of waiting for the poll.
+  useEffect(() => {
+    const hub = createLiveChatHub();
+    const refresh = () => queryClient.invalidateQueries({ queryKey: ["tickets"] });
+
+    hub.on(HubEvents.TicketCreated, refresh);
+    hub.on(HubEvents.SessionResolved, refresh);
+
+    hub
+      .start()
+      .then(() => hub.invoke(HubMethods.JoinAdminRoom).catch(() => {}))
+      .catch(() => {});
+
+    return () => {
+      hub.stop();
+    };
+  }, [queryClient]);
 
   const list = tickets.filter(
     (t) =>
@@ -159,16 +188,13 @@ function TicketsPage() {
                 list.map((t) => (
                   <tr
                     key={t.id}
-                    className="border-b border-border/40 transition hover:bg-accent/40"
+                    onClick={() => navigate({ to: "/admin/tickets/$ticketId", params: { ticketId: t.id } })}
+                    className="border-b border-border/40 cursor-pointer transition hover:bg-accent/40"
                   >
                     <td className="p-3">
-                      <Link
-                        to="/admin/tickets/$ticketId"
-                        params={{ ticketId: t.id }}
-                        className="font-mono text-xs font-semibold text-primary hover:underline"
-                      >
+                      <span className="font-mono text-xs font-semibold text-primary">
                         {t.id.slice(0, 8).toUpperCase()}
-                      </Link>
+                      </span>
                     </td>
                     <td className="p-3">
                       <p className="font-medium">{t.subject}</p>

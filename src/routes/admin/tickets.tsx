@@ -4,8 +4,7 @@ import { GlassCard } from "@/components/admin/glass-card";
 import { ticketsService } from "@/services/ticketsService";
 import { createLiveChatHub, HubEvents, HubMethods } from "@/services/liveChatService";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Search, Filter, ArrowUpDown, Loader2 } from "lucide-react";
+import { Search, Loader2, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 
@@ -52,18 +51,34 @@ function formatDate(iso: string) {
   }
 }
 
+// Tone the rating badge by score: green for happy, amber for neutral, rose for unhappy.
+function ratingTone(n: number) {
+  if (n >= 4) return "bg-primary/15 text-primary";
+  if (n === 3) return "bg-accent-amber/15 text-accent-amber";
+  return "bg-destructive/15 text-destructive";
+}
+
+function RatingBadge({ rating }: { rating: number | null }) {
+  if (rating == null) return <span className="text-muted-foreground">—</span>;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+        ratingTone(rating),
+      )}
+    >
+      <Star className="h-3 w-3 fill-current" />
+      {rating}
+    </span>
+  );
+}
+
 function TicketsPage() {
   const [q, setQ] = useState("");
-  const [status, setStatus] = useState<string>("all");
 
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-
-  // When on a child route (e.g. /admin/tickets/$ticketId), render the child
-  if (pathname.startsWith("/admin/tickets/")) {
-    return <Outlet />;
-  }
 
   const { data: tickets = [], isLoading } = useQuery({
     queryKey: ["tickets"],
@@ -91,53 +106,24 @@ function TicketsPage() {
     };
   }, [queryClient]);
 
+  // When on a child route (e.g. /admin/tickets/$ticketId), render the child.
+  // Must come after all hooks so hook order stays stable across navigation.
+  if (pathname.startsWith("/admin/tickets/")) {
+    return <Outlet />;
+  }
+
   const list = tickets.filter(
     (t) =>
-      (status === "all" || t.status.toLowerCase() === status.toLowerCase()) &&
-      (q === "" ||
-        t.subject.toLowerCase().includes(q.toLowerCase()) ||
-        t.id.toLowerCase().includes(q.toLowerCase())),
+      q === "" ||
+      t.subject.toLowerCase().includes(q.toLowerCase()) ||
+      t.id.toLowerCase().includes(q.toLowerCase()),
   );
-
-  const counts = {
-    all: tickets.length,
-    open: tickets.filter((t) => t.status.toLowerCase() === "open").length,
-    in_progress: tickets.filter(
-      (t) => t.status.toLowerCase() === "in_progress" || t.status.toLowerCase() === "inprogress",
-    ).length,
-    escalated: tickets.filter((t) => t.status.toLowerCase() === "escalated").length,
-    resolved: tickets.filter((t) => t.status.toLowerCase() === "resolved").length,
-  };
 
   return (
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Tickets</h1>
         <p className="text-sm text-muted-foreground">Triage and resolve customer issues.</p>
-      </div>
-
-      {/* Filter chips */}
-      <div className="flex flex-wrap gap-2">
-        {[
-          { k: "all", l: "All" },
-          { k: "open", l: "Open" },
-          { k: "in_progress", l: "In progress" },
-          { k: "escalated", l: "Escalated" },
-          { k: "resolved", l: "Resolved" },
-        ].map((s) => (
-          <button
-            key={s.k}
-            onClick={() => setStatus(s.k)}
-            className={cn(
-              "rounded-full px-3 py-1.5 text-xs font-medium transition",
-              status === s.k
-                ? "bg-primary text-primary-foreground"
-                : "glass text-foreground hover:bg-accent",
-            )}
-          >
-            {s.l} <span className="ml-1 opacity-70">{counts[s.k as keyof typeof counts]}</span>
-          </button>
-        ))}
       </div>
 
       <GlassCard className="p-0">
@@ -151,12 +137,6 @@ function TicketsPage() {
               className="h-9 pl-9 bg-background/40"
             />
           </div>
-          <Button variant="outline" size="sm">
-            <Filter className="mr-1 h-3.5 w-3.5" /> Filters
-          </Button>
-          <Button variant="outline" size="sm">
-            <ArrowUpDown className="mr-1 h-3.5 w-3.5" /> Sort
-          </Button>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -168,19 +148,20 @@ function TicketsPage() {
                 <th className="p-3 font-medium">Assigned</th>
                 <th className="p-3 font-medium">Priority</th>
                 <th className="p-3 font-medium">Status</th>
+                <th className="p-3 font-medium">Rating</th>
                 <th className="p-3 font-medium">Updated</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
+                  <td colSpan={8} className="py-10 text-center text-sm text-muted-foreground">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin" />
                   </td>
                 </tr>
               ) : list.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
+                  <td colSpan={8} className="py-10 text-center text-sm text-muted-foreground">
                     No tickets found.
                   </td>
                 </tr>
@@ -232,6 +213,9 @@ function TicketsPage() {
                           </span>
                         )}
                       </div>
+                    </td>
+                    <td className="p-3">
+                      <RatingBadge rating={t.customerRating} />
                     </td>
                     <td className="p-3 text-[11px] text-muted-foreground">
                       {formatDate(t.updatedAt)}

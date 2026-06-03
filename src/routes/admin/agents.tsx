@@ -2,7 +2,7 @@ import { createFileRoute, Link, Outlet, useNavigate, useRouterState } from "@tan
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { GlassCard } from "@/components/admin/glass-card";
 import { agentsService, type Agent } from "@/services/agentsService";
-import { liveChatService } from "@/services/liveChatService";
+import { liveChatService, createLiveChatHub, HubEvents, HubMethods } from "@/services/liveChatService";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { Plus, Search, ChevronRight, Upload, RefreshCw, Eye, EyeOff, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Table,
@@ -80,6 +80,23 @@ function AgentsPage() {
     retry: 1,
     refetchInterval: 30_000,
   });
+
+  // Live agent-status updates: the hub broadcasts AgentStatusChanged to admins
+  // whenever an agent goes Online/Busy/Away/Offline. Refresh the roster on the
+  // spot instead of waiting for the 30s poll.
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const hub = createLiveChatHub();
+    const refresh = () => queryClient.invalidateQueries({ queryKey: ["agents"] });
+    hub.on(HubEvents.AgentStatusChanged, refresh);
+    hub
+      .start()
+      .then(() => hub.invoke(HubMethods.JoinAdminRoom).catch(() => {}))
+      .catch(() => {});
+    return () => {
+      hub.stop();
+    };
+  }, [queryClient]);
 
   if (pathname.startsWith("/admin/agents/")) {
     return <Outlet />;

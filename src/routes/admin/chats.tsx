@@ -88,6 +88,11 @@ function ChatsPage() {
   const hubRef = useRef<signalR.HubConnection | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True while the supervisor is typing in the barge composer. The server
+  // broadcasts AgentTyping to the whole session (caller included), so we use
+  // this to ignore our own echoed typing event in the admin transcript.
+  const selfTypingRef = useRef(false);
+  const selfStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => setTick((x) => x + 1), 1000);
@@ -128,7 +133,11 @@ function ChatsPage() {
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
       typingTimerRef.current = setTimeout(() => setTypingActor(null), 4000);
     };
-    hub.on(HubEvents.AgentTyping, () => flagTyping("agent"));
+    hub.on(HubEvents.AgentTyping, () => {
+      // Suppress the echo of our own supervisor typing.
+      if (selfTypingRef.current) return;
+      flagTyping("agent");
+    });
     hub.on(HubEvents.AgentStoppedTyping, () => setTypingActor(null));
     hub.on(HubEvents.CustomerTyping, () => flagTyping("customer"));
     hub.on(HubEvents.CustomerStoppedTyping, () => setTypingActor(null));
@@ -233,9 +242,28 @@ function ChatsPage() {
     }
   };
 
+  // Broadcast supervisor typing during a barge so the customer's widget shows
+  // the typing indicator (the customer already listens for AgentTyping). We set
+  // selfTypingRef so the echoed AgentTyping event doesn't light up our own view.
+  const emitSupervisorStopTyping = () => {
+    if (!activeId || !selfTypingRef.current) return;
+    selfTypingRef.current = false;
+    hubRef.current?.invoke(HubMethods.AgentStoppedTyping, activeId).catch(() => {});
+  };
+
+  const emitSupervisorTyping = () => {
+    if (!activeId) return;
+    selfTypingRef.current = true;
+    hubRef.current?.invoke(HubMethods.AgentTyping, activeId).catch(() => {});
+    if (selfStopTimerRef.current) clearTimeout(selfStopTimerRef.current);
+    selfStopTimerRef.current = setTimeout(emitSupervisorStopTyping, 2000);
+  };
+
   const handleSend = async () => {
     if (!reply.trim() || !activeId) return;
     try {
+      if (selfStopTimerRef.current) clearTimeout(selfStopTimerRef.current);
+      emitSupervisorStopTyping();
       await hubRef.current?.invoke(HubMethods.SupervisorSendMessage, activeId, reply.trim());
       setReply("");
     } catch {
@@ -245,7 +273,7 @@ function ChatsPage() {
 
   return (
     <div className="flex flex-col gap-3 lg:h-[calc(100vh-110px)]">
-      <div className="grid flex-1 min-h-0 gap-4 lg:grid-cols-[340px_1fr_320px]">
+      <div className="grid flex-1 min-h-0 gap-4 lg:grid-cols-[minmax(200px,248px)_minmax(0,1fr)_minmax(216px,300px)]">
         {/* === Column 1: Live Feed === */}
         <GlassCard className="flex max-h-[40vh] flex-col overflow-hidden p-0 lg:max-h-none">
           <div className="border-b border-border/60 p-3">
@@ -378,36 +406,40 @@ function ChatsPage() {
                   </div>
                 ) : (
                   <>
-                    {publicMessages.map((m, i) => (
-                      <div
-                        key={i}
-                        className={cn(
-                          "flex",
-                          m.senderType.toLowerCase() === "agent" ? "justify-end" : "justify-start",
-                        )}
-                      >
+                    {publicMessages.map((m, i) => {
+                      const fromCustomer = m.senderType.toLowerCase() === "customer";
+                      // Supervisor replies arrive as senderType "Agent" / senderName
+                      // "Supervisor" — give them a violet bubble distinct from the
+                      // agent's green so it's clear who said what.
+                      const isSupervisor = !fromCustomer && m.senderName === "Supervisor";
+                      return (
                         <div
-                          className={cn(
-                            "max-w-[70%] rounded-2xl px-3.5 py-2 text-sm",
-                            m.senderType.toLowerCase() === "agent"
-                              ? "gradient-primary text-primary-foreground"
-                              : "border border-border bg-background/60",
-                          )}
+                          key={i}
+                          className={cn("flex", fromCustomer ? "justify-start" : "justify-end")}
                         >
-                          <p>{m.content}</p>
-                          <p
+                          <div
                             className={cn(
-                              "mt-1 text-[10px]",
-                              m.senderType.toLowerCase() === "agent"
-                                ? "text-primary-foreground/70"
-                                : "text-muted-foreground",
+                              "max-w-[70%] rounded-2xl px-3.5 py-2 text-sm",
+                              fromCustomer
+                                ? "border border-border bg-background/60"
+                                : isSupervisor
+                                  ? "bg-gradient-to-br from-violet-500 to-violet-600 text-white"
+                                  : "gradient-primary text-primary-foreground",
                             )}
                           >
-                            {formatTs(m.timestamp)}
-                          </p>
+                            <p>{m.content}</p>
+                            <p
+                              className={cn(
+                                "mt-1 text-[10px]",
+                                fromCustomer ? "text-muted-foreground" : "text-white/70",
+                              )}
+                            >
+                              {isSupervisor ? "Supervisor" : m.senderName} · {formatTs(m.timestamp)}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                     {whisperMessages.map((w, i) => (
                       <div key={`w-${i}`} className="flex justify-end">
                         <div className="max-w-[70%] rounded-2xl border border-dashed border-violet-400/60 bg-violet-500/10 px-3.5 py-2 text-sm text-violet-700 dark:text-violet-300">
@@ -444,28 +476,32 @@ function ChatsPage() {
               <div className="border-t border-border/60 p-4">
                 {!isBarged ? (
                   <>
-                    <div className="flex items-center gap-2 rounded-2xl border border-dashed border-violet-400/60 bg-violet-500/5 p-2 focus-within:border-violet-500">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/15 text-violet-600 dark:text-violet-400">
-                        <Lock className="h-4 w-4" />
+                    <div className="rounded-2xl border border-dashed border-violet-400/60 bg-violet-500/5 p-2 focus-within:border-violet-500">
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-500/15 text-violet-600 dark:text-violet-400">
+                          <Lock className="h-4 w-4" />
+                        </div>
+                        <input
+                          value={whisper}
+                          onChange={(e) => setWhisper(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleWhisper();
+                          }}
+                          placeholder={`Send a private tip to ${active.agentName ?? "agent"}…`}
+                          className="h-9 min-w-0 flex-1 border-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                        />
                       </div>
-                      <input
-                        value={whisper}
-                        onChange={(e) => setWhisper(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") handleWhisper();
-                        }}
-                        placeholder={`Send a private tip to ${active.agentName ?? "agent"}…`}
-                        className="h-9 flex-1 border-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                      />
-                      <Button
-                        onClick={handleWhisper}
-                        className="h-9 bg-violet-600 text-white hover:bg-violet-700"
-                      >
-                        <Megaphone className="mr-1 h-3.5 w-3.5" /> Whisper
-                      </Button>
-                      <Button variant="destructive" onClick={handleBarge} className="h-9">
-                        <ShieldAlert className="mr-1 h-3.5 w-3.5" /> Barge in
-                      </Button>
+                      <div className="mt-2 flex gap-2">
+                        <Button
+                          onClick={handleWhisper}
+                          className="h-9 flex-1 bg-violet-600 text-white hover:bg-violet-700"
+                        >
+                          <Megaphone className="mr-1 h-3.5 w-3.5" /> Whisper
+                        </Button>
+                        <Button variant="destructive" onClick={handleBarge} className="h-9 flex-1">
+                          <ShieldAlert className="mr-1 h-3.5 w-3.5" /> Barge in
+                        </Button>
+                      </div>
                     </div>
                     <p className="mt-1.5 flex items-center gap-1.5 px-1 text-[10px] text-muted-foreground">
                       <Lock className="h-3 w-3" /> Whispers are visible only to{" "}
@@ -474,25 +510,31 @@ function ChatsPage() {
                   </>
                 ) : (
                   <>
-                    <div className="flex items-center gap-2 rounded-2xl border border-rose-400/60 bg-background/60 p-2 focus-within:border-rose-500">
-                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-500/15 text-rose-600 dark:text-rose-400">
-                        <ShieldAlert className="h-4 w-4" />
+                    <div className="rounded-2xl border border-rose-400/60 bg-background/60 p-2 focus-within:border-rose-500">
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rose-500/15 text-rose-600 dark:text-rose-400">
+                          <ShieldAlert className="h-4 w-4" />
+                        </div>
+                        <input
+                          value={reply}
+                          onChange={(e) => {
+                            setReply(e.target.value);
+                            if (e.target.value) emitSupervisorTyping();
+                            else emitSupervisorStopTyping();
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleSend();
+                          }}
+                          placeholder={`Reply as supervisor to ${active.customerName}…`}
+                          className="h-9 min-w-0 flex-1 border-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                        />
+                        <Button
+                          onClick={handleSend}
+                          className="h-9 shrink-0 gradient-primary text-primary-foreground"
+                        >
+                          <Send className="mr-1 h-3.5 w-3.5" /> Send
+                        </Button>
                       </div>
-                      <input
-                        value={reply}
-                        onChange={(e) => setReply(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") handleSend();
-                        }}
-                        placeholder={`Reply as supervisor to ${active.customerName}…`}
-                        className="h-9 flex-1 border-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                      />
-                      <Button
-                        onClick={handleSend}
-                        className="h-9 gradient-primary text-primary-foreground"
-                      >
-                        <Send className="mr-1 h-3.5 w-3.5" /> Send
-                      </Button>
                     </div>
                     <p className="mt-1.5 flex items-center gap-1.5 px-1 text-[10px] text-rose-600 dark:text-rose-400">
                       <AlertTriangle className="h-3 w-3" /> You've taken over. Messages now go

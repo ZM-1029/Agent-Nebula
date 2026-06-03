@@ -4,7 +4,7 @@ import { ticketsService } from "@/services/ticketsService";
 import { agentsService } from "@/services/agentsService";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ArrowLeft, Send, Loader2, UserCheck } from "lucide-react";
+import { ArrowLeft, Send, Loader2, UserCheck, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -347,6 +347,28 @@ function TicketDetail() {
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Assignee</dt>
                 <dd className="font-medium">{t.assignedAgent?.name ?? "Unassigned"}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">Customer rating</dt>
+                <dd className="font-medium">
+                  {t.customerRating == null ? (
+                    <span className="text-muted-foreground">Not rated</span>
+                  ) : (
+                    <span className="inline-flex items-center gap-0.5">
+                      {[1, 2, 3, 4, 5].map((n) => (
+                        <Star
+                          key={n}
+                          className={cn(
+                            "h-3.5 w-3.5",
+                            n <= t.customerRating!
+                              ? "fill-amber-400 text-amber-400"
+                              : "text-muted-foreground/30",
+                          )}
+                        />
+                      ))}
+                    </span>
+                  )}
+                </dd>
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">SLA elapsed</dt>

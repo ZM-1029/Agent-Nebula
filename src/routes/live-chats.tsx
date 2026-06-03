@@ -3,7 +3,6 @@ import { AppShell } from "@/components/frankie/AppShell";
 import { GlassCard } from "@/components/frankie/GlassCard";
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  Paperclip,
   Smile,
   Send,
   FileText,
@@ -36,6 +35,14 @@ import * as signalR from "@microsoft/signalr";
 
 const AGENT_STATUSES = ["Online", "Busy", "Away", "Offline"] as const;
 type AgentStatus = (typeof AGENT_STATUSES)[number];
+
+// Common emojis for the composer picker.
+const EMOJIS = [
+  "😀", "😃", "😄", "😁", "😅", "😂", "🙂", "😊",
+  "😉", "😍", "😎", "🤔", "👍", "👎", "👌", "🙏",
+  "👏", "🙌", "💪", "🎉", "✅", "❌", "❤️", "🔥",
+  "⭐", "💯", "😢", "😡", "🤝", "👋", "🚀", "💡",
+];
 
 export const Route = createFileRoute("/live-chats")({
   head: () => ({
@@ -747,6 +754,7 @@ function ChatPane({
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [showTransfer, setShowTransfer] = useState(false);
+  const [showEmoji, setShowEmoji] = useState(false);
   const { replies: cannedReplies } = useCannedReplies();
 
   useEffect(() => {
@@ -877,6 +885,15 @@ function ChatPane({
                 );
               }
               const fromCustomer = m.senderType.toLowerCase() === "customer";
+              // Supervisor messages are posted as senderType "Agent" but tagged
+              // senderName "Supervisor" — give them a distinct violet bubble so the
+              // agent can tell them apart from their own replies.
+              const isSupervisor = !fromCustomer && m.senderName === "Supervisor";
+              const bubble = fromCustomer
+                ? "rounded-bl-md bg-muted/80 text-foreground dark:bg-muted/60"
+                : isSupervisor
+                  ? "rounded-br-md bg-gradient-to-br from-violet-500 to-violet-600 text-white"
+                  : "rounded-br-md bg-gradient-to-br from-brand to-[oklch(0.78_0.16_155)] text-white";
               return (
                 <motion.div
                   key={i}
@@ -885,13 +902,13 @@ function ChatPane({
                   className={`flex ${fromCustomer ? "justify-start" : "justify-end"}`}
                 >
                   <div
-                    className={`max-w-[70%] rounded-2xl px-4 py-2.5 text-sm shadow-sm ${fromCustomer ? "rounded-bl-md bg-muted/80 text-foreground dark:bg-muted/60" : "rounded-br-md bg-gradient-to-br from-brand to-[oklch(0.78_0.16_155)] text-white"}`}
+                    className={`max-w-[70%] rounded-2xl px-4 py-2.5 text-sm shadow-sm ${bubble}`}
                   >
                     {m.content}
                     <div
                       className={`mt-1 text-[10px] ${!fromCustomer ? "text-white/70" : "text-muted-foreground"}`}
                     >
-                      {m.senderName} · {formatMsgTime(m.timestamp)}
+                      {isSupervisor ? "Supervisor" : m.senderName} · {formatMsgTime(m.timestamp)}
                     </div>
                   </div>
                 </motion.div>
@@ -942,9 +959,6 @@ function ChatPane({
           </div>
         )}
         <div className="glass-soft flex items-end gap-2 rounded-2xl p-2">
-          <button className="grid h-9 w-9 place-items-center rounded-xl text-foreground/60 hover:bg-muted/60">
-            <Paperclip className="h-4 w-4" />
-          </button>
           <button
             onClick={() => setShowCanned(!showCanned)}
             className="flex h-9 items-center gap-1 rounded-xl px-2 text-xs font-medium text-foreground/70 hover:bg-muted/60"
@@ -964,9 +978,35 @@ function ChatPane({
             placeholder={`Reply to ${session.customerName.split(" ")[0]}…`}
             className="min-h-[36px] flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none"
           />
-          <button className="grid h-9 w-9 place-items-center rounded-xl text-foreground/60 hover:bg-muted/60">
-            <Smile className="h-4 w-4" />
-          </button>
+          <div className="relative">
+            {showEmoji && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowEmoji(false)} />
+                <div className="absolute bottom-11 right-0 z-20 grid w-56 grid-cols-8 gap-0.5 rounded-2xl border border-border bg-popover p-2 shadow-lg">
+                  {EMOJIS.map((e) => (
+                    <button
+                      key={e}
+                      type="button"
+                      onClick={() => {
+                        setDraft(draft + e);
+                        setShowEmoji(false);
+                      }}
+                      className="grid h-6 w-6 place-items-center rounded-lg text-base hover:bg-muted/60"
+                    >
+                      {e}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowEmoji((v) => !v)}
+              className="grid h-9 w-9 place-items-center rounded-xl text-foreground/60 hover:bg-muted/60"
+            >
+              <Smile className="h-4 w-4" />
+            </button>
+          </div>
           <button
             onClick={onSend}
             className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-brand to-[oklch(0.78_0.16_155)] text-white shadow-[0_8px_22px_-8px_rgba(87,184,92,0.9)] transition hover:brightness-105"

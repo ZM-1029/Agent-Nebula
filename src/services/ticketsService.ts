@@ -15,6 +15,8 @@ export interface Ticket {
   tags: string[];
   /** Computed: slaDeadline < now && status !== "Resolved" */
   slaBreach: boolean;
+  /** Customer's 1-5 star rating of the source chat, or null if not rated */
+  customerRating: number | null;
   assignedAgent: { id: string; name: string } | null;
 }
 

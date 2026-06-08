@@ -14,6 +14,21 @@ import {
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
+import { accountService } from "@/services/accountService";
+
+// Colour the status dot to match the agent's availability.
+function statusDotClass(status: string | undefined): string {
+  switch ((status ?? "").toLowerCase()) {
+    case "online":
+      return "bg-emerald-500";
+    case "busy":
+      return "bg-amber-500";
+    case "away":
+      return "bg-amber-400";
+    default:
+      return "bg-muted-foreground/40";
+  }
+}
 
 // Map a backend notification "type" string to a visual tone dot.
 function toneForType(type: string): "warning" | "destructive" | "primary" | "blue" {
@@ -48,8 +63,16 @@ function initials(name: string | null | undefined): string {
 
 export function AppTopbar({ onOpenMobileNav }: { onOpenMobileNav?: () => void }) {
   const { theme, setTheme } = useTheme();
-  const { signOut, user } = useAuth();
+  const { signOut, user, role } = useAuth();
   const qc = useQueryClient();
+
+  // Basic account details shown in the profile dropdown.
+  const { data: me } = useQuery({
+    queryKey: ["me"],
+    queryFn: accountService.getMe,
+    staleTime: 60_000,
+    retry: 1,
+  });
 
   const { data: notifications, isLoading } = useQuery({
     queryKey: ["notifications"],
@@ -220,7 +243,52 @@ export function AppTopbar({ onOpenMobileNav }: { onOpenMobileNav?: () => void })
             <ChevronDown className="hidden h-3.5 w-3.5 text-muted-foreground sm:block" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="glass-strong border-0">
+        <DropdownMenuContent align="end" className="glass-strong w-64 border-0 p-0">
+          {/* Identity header */}
+          <div className="flex items-center gap-3 p-3">
+            <span className="relative flex h-10 w-10 items-center justify-center rounded-xl gradient-primary text-sm font-semibold text-primary-foreground">
+              {initials(me?.name ?? user?.displayName)}
+              <span
+                className={cn(
+                  "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-background",
+                  statusDotClass(me?.status),
+                )}
+              />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold leading-tight">
+                {me?.name ?? user?.displayName ?? "Account"}
+              </p>
+              <p className="truncate text-[11px] text-muted-foreground">
+                {me?.email ?? user?.email ?? ""}
+              </p>
+            </div>
+          </div>
+
+          <DropdownMenuSeparator />
+
+          {/* Basic details */}
+          <div className="space-y-1.5 px-3 py-2 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Status</span>
+              <span className="flex items-center gap-1.5 font-medium capitalize">
+                <span className={cn("h-2 w-2 rounded-full", statusDotClass(me?.status))} />
+                {me?.status ?? "—"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Role</span>
+              <span className="font-medium capitalize">{me?.role ?? role ?? "—"}</span>
+            </div>
+            {me?.phone && (
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Phone</span>
+                <span className="font-medium">{me.phone}</span>
+              </div>
+            )}
+          </div>
+
+          <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => signOut()}>Sign out</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

@@ -21,6 +21,31 @@ export interface ActiveSession {
   acceptedAt: string | null;
   agentName: string | null;
   agentId: string | null;
+  /** JSON snapshot of the looked-up order captured at chat start (or null). */
+  orderSnapshot: string | null;
+  /** Minutes the customer has waited for an agent reply (0 if agent replied last). */
+  awaitingReplyMins?: number;
+  /** Minutes since the last message from anyone (dormant-chat detection). */
+  lastActivityMins?: number;
+}
+
+/** Shape of the parsed `orderSnapshot` JSON (see widget _lcOrderSnapshot). */
+export interface OrderSnapshot {
+  reference?: string;
+  order_number?: string;
+  retailer?: string;
+  recipient?: string;
+  address?: string;
+  postcode?: string;
+  status?: string;
+  confirmed?: string;
+  planned_date?: string;
+  planned_slot?: { start?: string; end?: string } | null;
+  products?: { part?: string; description?: string }[];
+  services?: { service_level?: string; delivery_point?: string } | null;
+  order_steps?: Record<string, string> | null;
+  email?: string;
+  mobile?: string;
 }
 
 export interface ChatMessage {
@@ -93,6 +118,9 @@ export const HubEvents = {
   ChatTransferred: "ChatTransferred",
   WhisperReceived: "WhisperReceived",
   QueueEmpty: "QueueEmpty",
+  ChatAlreadyTaken: "ChatAlreadyTaken",
+  ChatAutoAssigned: "ChatAutoAssigned",
+  ChatReassigned: "ChatReassigned",
 
   // → Customer
   AgentJoined: "AgentJoined",
@@ -118,10 +146,12 @@ export const HubEvents = {
 export const HubMethods = {
   // Shared
   RejoinSession: "RejoinSession",
+  EndChat: "EndChat",
 
   // Agent methods
   AgentConnect: "AgentConnect",
   AcceptNextChat: "AcceptNextChat",
+  AcceptChat: "AcceptChat",
   AgentSendMessage: "AgentSendMessage",
   AgentTyping: "AgentTyping",
   AgentStoppedTyping: "AgentStoppedTyping",

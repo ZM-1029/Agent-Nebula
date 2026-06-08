@@ -1,11 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { User, Lock, Loader2 } from "lucide-react";
+import { User, Lock, Loader2, Shuffle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { accountService } from "@/services/accountService";
+import { settingsService, type WorkspaceSettings } from "@/services/settingsService";
 import { useAuth } from "@/hooks/use-auth";
 
 export const Route = createFileRoute("/admin/settings")({
@@ -21,6 +23,7 @@ export const Route = createFileRoute("/admin/settings")({
 const tabs = [
   { id: "personal", label: "Personal Information", icon: User },
   { id: "security", label: "Security & Password", icon: Lock },
+  { id: "routing", label: "Auto-assign", icon: Shuffle },
 ] as const;
 
 type TabId = (typeof tabs)[number]["id"];
@@ -71,7 +74,15 @@ function SettingsPage() {
             </ul>
           </nav>
 
-          <div className="p-6">{tab === "personal" ? <PersonalInfo /> : <Security />}</div>
+          <div className="p-6">
+            {tab === "personal" ? (
+              <PersonalInfo />
+            ) : tab === "security" ? (
+              <Security />
+            ) : (
+              <Routing />
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -235,6 +246,102 @@ function Security() {
         >
           {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Update password
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function Routing() {
+  const [s, setS] = useState<WorkspaceSettings | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    settingsService
+      .get()
+      .then((d) => !cancelled && setS(d))
+      .catch(() => !cancelled && toast.error("Couldn't load settings."))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const save = async () => {
+    if (!s) return;
+    setSaving(true);
+    try {
+      const updated = await settingsService.update(s);
+      setS(updated);
+      toast.success("Auto-assign settings saved.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save settings.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-10">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+  if (!s) return null;
+
+  const num = (key: keyof WorkspaceSettings, label: string, hint: string) => (
+    <div>
+      <label className="text-sm font-medium">{label}</label>
+      <p className="text-[11px] text-muted-foreground">{hint}</p>
+      <Input
+        type="number"
+        value={String(s[key] as number)}
+        onChange={(e) => setS({ ...s, [key]: Number(e.target.value) })}
+        disabled={!s.autoAssignEnabled}
+        className="mt-1 h-10 w-32 rounded-lg"
+      />
+    </div>
+  );
+
+  return (
+    <div className="max-w-2xl">
+      <h2 className="text-lg font-semibold">Auto-assign routing</h2>
+      <p className="text-sm text-muted-foreground">
+        When enabled, queued chats are pushed to the longest-idle available agent instead of
+        waiting to be picked up. If an agent doesn't reply within the response window, the chat is
+        reassigned to the next agent and a flag is raised for admins.
+      </p>
+
+      <div className="mt-6 flex items-center justify-between rounded-xl border border-border bg-background/40 p-4">
+        <div>
+          <p className="text-sm font-medium">Enable auto-assign</p>
+          <p className="text-[11px] text-muted-foreground">
+            Off = agents pull from the queue (current behaviour).
+          </p>
+        </div>
+        <Switch
+          checked={s.autoAssignEnabled}
+          onCheckedChange={(v) => setS({ ...s, autoAssignEnabled: v })}
+        />
+      </div>
+
+      <div className="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-3">
+        {num("maxConcurrentChats", "Max chats / agent", "Cap on simultaneous chats (1–20).")}
+        {num("responseTimeoutSeconds", "Response window (s)", "Reply within this or reassign (10–300).")}
+        {num("maxAssignAttempts", "Max attempts", "Agents to try before escalating (1–10).")}
+      </div>
+
+      <div className="mt-6 flex justify-end">
+        <Button
+          className="gradient-primary text-primary-foreground"
+          onClick={save}
+          disabled={saving}
+        >
+          {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          Save settings
         </Button>
       </div>
     </div>

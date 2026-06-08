@@ -2,6 +2,16 @@ import { createFileRoute } from "@tanstack/react-router";
 import { GlassCard } from "@/components/admin/glass-card";
 import { Button } from "@/components/ui/button";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Eye,
   Lock,
   Megaphone,
@@ -10,9 +20,12 @@ import {
   Send,
   AlertTriangle,
   ShieldAlert,
+  PhoneOff,
+  Smile,
   Loader2,
+  Package,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -22,7 +35,10 @@ import {
   HubEvents,
   HubMethods,
   type ChatMessage,
+  type OrderSnapshot,
 } from "@/services/liveChatService";
+import { OrderDetails } from "@/components/order-details";
+import { agentsService } from "@/services/agentsService";
 import type * as signalR from "@microsoft/signalr";
 
 export const Route = createFileRoute("/admin/chats")({
@@ -34,6 +50,15 @@ export const Route = createFileRoute("/admin/chats")({
   }),
   component: ChatsPage,
 });
+
+const BARGED_KEY = "admin-barged-sessions";
+
+const EMOJIS = [
+  "😀", "😃", "😄", "😁", "😅", "😂", "🙂", "😊",
+  "😉", "😍", "😎", "🤔", "👍", "👎", "👌", "🙏",
+  "👏", "🙌", "💪", "🎉", "✅", "❌", "❤️", "🔥",
+  "⭐", "💯", "😢", "😡", "🤝", "👋", "🚀", "💡",
+];
 
 function initials(name: string | null | undefined) {
   if (!name) return "?";
@@ -63,6 +88,45 @@ function formatTs(iso: string) {
   }
 }
 
+function HealthTile({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: string | number;
+  tone?: "default" | "amber" | "rose";
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-xl border px-3 py-2",
+        tone === "amber"
+          ? "border-amber-400/50 bg-amber-500/10"
+          : tone === "rose"
+            ? "border-rose-400/50 bg-rose-500/10"
+            : "border-border bg-background/40",
+      )}
+    >
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </p>
+      <p
+        className={cn(
+          "mt-0.5 text-xl font-semibold tabular-nums",
+          tone === "amber"
+            ? "text-amber-600 dark:text-amber-400"
+            : tone === "rose"
+              ? "text-rose-600 dark:text-rose-400"
+              : "",
+        )}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
 function ChatsPage() {
   const queryClient = useQueryClient();
 
@@ -73,12 +137,37 @@ function ChatsPage() {
     refetchInterval: 30_000,
   });
 
+  // Team health: agents (for status) + the live queue (for waiting customers).
+  const { data: allAgents = [] } = useQuery({
+    queryKey: ["agents"],
+    queryFn: () => agentsService.getAll(),
+    retry: 1,
+    refetchInterval: 15_000,
+  });
+
+  const { data: liveQueue = [] } = useQuery({
+    queryKey: ["live-queue"],
+    queryFn: () => liveChatService.getQueue(),
+    retry: 1,
+    refetchInterval: 15_000,
+  });
+
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [whisper, setWhisper] = useState("");
   const [reply, setReply] = useState("");
-  const [barged, setBarged] = useState<Record<string, boolean>>({});
+  // Persist barged sessions so the supervisor composer survives a page refresh.
+  const [barged, setBarged] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(BARGED_KEY) ?? "{}");
+    } catch {
+      return {};
+    }
+  });
+  const [bargeConfirmOpen, setBargeConfirmOpen] = useState(false);
+  const [endConfirmOpen, setEndConfirmOpen] = useState(false);
+  const [showEmoji, setShowEmoji] = useState(false);
   const [hubStatus, setHubStatus] = useState<"connecting" | "connected" | "disconnected">(
     "connecting",
   );
@@ -142,14 +231,18 @@ function ChatsPage() {
     hub.on(HubEvents.CustomerTyping, () => flagTyping("customer"));
     hub.on(HubEvents.CustomerStoppedTyping, () => setTypingActor(null));
 
-    hub.on(HubEvents.QueueUpdated, () => {
+    // Refresh sessions, queue and agent roster together so the health strip
+    // stays live (waiting count, idle agents, etc.).
+    const refreshOps = () => {
       queryClient.invalidateQueries({ queryKey: ["admin-sessions"] });
-    });
-    hub.on(HubEvents.SessionAssigned, () => {
-      queryClient.invalidateQueries({ queryKey: ["admin-sessions"] });
-    });
-    hub.on(HubEvents.SessionResolved, () => {
-      queryClient.invalidateQueries({ queryKey: ["admin-sessions"] });
+      queryClient.invalidateQueries({ queryKey: ["live-queue"] });
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    };
+    hub.on(HubEvents.QueueUpdated, refreshOps);
+    hub.on(HubEvents.SessionAssigned, refreshOps);
+    hub.on(HubEvents.SessionResolved, refreshOps);
+    hub.on(HubEvents.AgentStatusChanged, () => {
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
     });
 
     hub
@@ -201,9 +294,53 @@ function ChatsPage() {
   }, [messages]);
 
   const active = sessions.find((s) => s.id === activeId) ?? null;
-  const isBarged = activeId ? !!barged[activeId] : false;
+  const orderInfo = useMemo<OrderSnapshot | null>(() => {
+    if (!active?.orderSnapshot) return null;
+    try {
+      return JSON.parse(active.orderSnapshot) as OrderSnapshot;
+    } catch {
+      return null;
+    }
+  }, [active?.orderSnapshot]);
   const publicMessages = messages.filter((m) => !m.isWhisper);
   const whisperMessages = messages.filter((m) => m.isWhisper);
+  // Barged if persisted locally, OR if the transcript already contains a
+  // supervisor message — the latter survives a refresh even on another device.
+  const isBarged = activeId
+    ? !!barged[activeId] || publicMessages.some((m) => m.senderName === "Supervisor")
+    : false;
+
+  // ── Team health (manager oversight) ────────────────────────────────────────
+  const handlingIds = new Set(sessions.map((s) => s.agentId).filter(Boolean));
+  // Number of live conversations (what "In chats" should reflect).
+  const activeChats = sessions.length;
+  // Agents present & working — Online (available) OR Busy (in a chat). An agent
+  // handling chats is "Busy" but is still online, so both count here.
+  const onlineCount = allAgents.filter((a) =>
+    ["online", "busy"].includes(a.status.toLowerCase()),
+  ).length;
+  // Available but handling no chat → spare capacity / the "slacking" signal.
+  const idleAgents = allAgents.filter(
+    (a) => a.status.toLowerCase() === "online" && !handlingIds.has(a.id),
+  );
+  const waiting = liveQueue.length;
+  const longestWaitMin = liveQueue.reduce((max, q) => {
+    const m = Math.floor((Date.now() - new Date(q.queuedAt).getTime()) / 60000);
+    return Math.max(max, m);
+  }, 0);
+  // Customers waiting beyond the SLA threshold (matches the backend alert).
+  const QUEUE_SLA_MIN = 5;
+  const slaBreaches = liveQueue.filter(
+    (q) => (Date.now() - new Date(q.queuedAt).getTime()) / 60000 > QUEUE_SLA_MIN,
+  ).length;
+  // Active chats the agent hasn't replied to beyond the threshold (neglected).
+  const STALLED_MIN = 5;
+  const stalledSessions = sessions.filter((s) => (s.awaitingReplyMins ?? 0) >= STALLED_MIN);
+  // Dormant active chats — no message from anyone for a while (nudge to wrap up).
+  const INACTIVE_MIN = 2;
+  const inactiveSessions = sessions.filter((s) => (s.lastActivityMins ?? 0) >= INACTIVE_MIN);
+  // The accountability signal: free agents while customers are waiting.
+  const idleWhileWaiting = waiting > 0 ? idleAgents : [];
 
   const handleWhisper = async () => {
     if (!whisper.trim() || !activeId || !active) return;
@@ -225,17 +362,25 @@ function ChatsPage() {
     }
   };
 
-  const handleBarge = async () => {
+  const handleBarge = () => {
     if (!activeId || isBarged) return;
-    if (
-      !window.confirm(
-        "Take over this conversation? The customer will be notified that a supervisor has joined.",
-      )
-    )
-      return;
+    setBargeConfirmOpen(true);
+  };
+
+  const confirmBarge = async () => {
+    setBargeConfirmOpen(false);
+    if (!activeId) return;
     try {
       await hubRef.current?.invoke(HubMethods.BargeIn, activeId);
-      setBarged((b) => ({ ...b, [activeId]: true }));
+      setBarged((b) => {
+        const next = { ...b, [activeId]: true };
+        try {
+          localStorage.setItem(BARGED_KEY, JSON.stringify(next));
+        } catch {
+          /* ignore quota / privacy-mode errors */
+        }
+        return next;
+      });
       toast.success(`You've taken over the chat with ${active?.customerName}`);
     } catch {
       toast.error("Failed to barge in");
@@ -271,8 +416,104 @@ function ChatsPage() {
     }
   };
 
+  const confirmEndChat = async () => {
+    setEndConfirmOpen(false);
+    if (!activeId) return;
+    const endedId = activeId;
+    try {
+      await hubRef.current?.invoke(HubMethods.EndChat, endedId);
+      // Clear the persisted barged flag for this session.
+      setBarged((b) => {
+        const next = { ...b };
+        delete next[endedId];
+        try {
+          localStorage.setItem(BARGED_KEY, JSON.stringify(next));
+        } catch {
+          /* ignore quota / privacy-mode errors */
+        }
+        return next;
+      });
+      toast.success(`Chat with ${active?.customerName ?? "customer"} ended`);
+      queryClient.invalidateQueries({ queryKey: ["admin-sessions"] });
+    } catch {
+      toast.error("Failed to end chat");
+    }
+  };
+
   return (
     <div className="flex flex-col gap-3 lg:h-[calc(100vh-110px)]">
+      {/* === Team health strip (manager oversight) === */}
+      <div className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
+        <HealthTile label="Waiting" value={waiting} tone={waiting > 0 ? "amber" : "default"} />
+        <HealthTile
+          label="Longest wait"
+          value={`${longestWaitMin}m`}
+          tone={longestWaitMin > QUEUE_SLA_MIN ? "rose" : "default"}
+        />
+        <HealthTile
+          label="SLA breaches"
+          value={slaBreaches}
+          tone={slaBreaches > 0 ? "rose" : "default"}
+        />
+        <HealthTile
+          label="Awaiting reply"
+          value={stalledSessions.length}
+          tone={stalledSessions.length > 0 ? "rose" : "default"}
+        />
+        <HealthTile
+          label="Inactive"
+          value={inactiveSessions.length}
+          tone={inactiveSessions.length > 0 ? "amber" : "default"}
+        />
+        <HealthTile label="Online" value={onlineCount} />
+        <HealthTile label="Active chats" value={activeChats} />
+        <HealthTile
+          label="Idle"
+          value={idleAgents.length}
+          tone={idleWhileWaiting.length > 0 ? "rose" : "default"}
+        />
+      </div>
+      {idleWhileWaiting.length > 0 && (
+        <div className="flex shrink-0 items-center gap-2 rounded-xl border border-rose-400/50 bg-rose-500/10 px-3 py-2 text-xs text-rose-700 dark:text-rose-300">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            <strong>
+              {idleWhileWaiting.length} agent{idleWhileWaiting.length > 1 ? "s" : ""} free
+            </strong>{" "}
+            while {waiting} customer{waiting > 1 ? "s" : ""} waiting —{" "}
+            {idleWhileWaiting.map((a) => a.name).join(", ")}
+          </span>
+        </div>
+      )}
+      {stalledSessions.length > 0 && (
+        <div className="flex shrink-0 items-center gap-2 rounded-xl border border-rose-400/50 bg-rose-500/10 px-3 py-2 text-xs text-rose-700 dark:text-rose-300">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            <strong>
+              {stalledSessions.length} chat{stalledSessions.length > 1 ? "s" : ""} awaiting a reply
+            </strong>{" "}
+            (no agent response in {STALLED_MIN}m+) —{" "}
+            {stalledSessions
+              .map((s) => `${s.customerName} / ${s.agentName ?? "unassigned"}`)
+              .join(", ")}
+          </span>
+        </div>
+      )}
+      {inactiveSessions.length > 0 && (
+        <div className="flex shrink-0 items-center gap-2 rounded-xl border border-amber-400/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            <strong>
+              {inactiveSessions.length} dormant chat{inactiveSessions.length > 1 ? "s" : ""}
+            </strong>{" "}
+            (no activity in {INACTIVE_MIN}m+) —{" "}
+            {inactiveSessions
+              .map((s) => `${s.customerName} / ${s.agentName ?? "unassigned"}`)
+              .join(", ")}
+          </span>
+        </div>
+      )}
+
       <div className="grid flex-1 min-h-0 gap-4 lg:grid-cols-[minmax(200px,248px)_minmax(0,1fr)_minmax(216px,300px)]">
         {/* === Column 1: Live Feed === */}
         <GlassCard className="flex max-h-[40vh] flex-col overflow-hidden p-0 lg:max-h-none">
@@ -528,11 +769,50 @@ function ChatsPage() {
                           placeholder={`Reply as supervisor to ${active.customerName}…`}
                           className="h-9 min-w-0 flex-1 border-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
                         />
+                        <div className="relative shrink-0">
+                          {showEmoji && (
+                            <>
+                              <div
+                                className="fixed inset-0 z-10"
+                                onClick={() => setShowEmoji(false)}
+                              />
+                              <div className="absolute bottom-11 right-0 z-20 grid w-56 grid-cols-8 gap-0.5 rounded-2xl border border-border bg-popover p-2 shadow-lg">
+                                {EMOJIS.map((e) => (
+                                  <button
+                                    key={e}
+                                    type="button"
+                                    onClick={() => {
+                                      setReply((r) => r + e);
+                                      setShowEmoji(false);
+                                    }}
+                                    className="grid h-6 w-6 place-items-center rounded-lg text-base hover:bg-muted/60"
+                                  >
+                                    {e}
+                                  </button>
+                                ))}
+                              </div>
+                            </>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setShowEmoji((v) => !v)}
+                            className="grid h-9 w-9 place-items-center rounded-xl text-foreground/60 hover:bg-muted/60"
+                          >
+                            <Smile className="h-4 w-4" />
+                          </button>
+                        </div>
                         <Button
                           onClick={handleSend}
                           className="h-9 shrink-0 gradient-primary text-primary-foreground"
                         >
                           <Send className="mr-1 h-3.5 w-3.5" /> Send
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => setEndConfirmOpen(true)}
+                          className="h-9 shrink-0 border-rose-400/60 text-rose-600 hover:bg-rose-500/10 dark:text-rose-400"
+                        >
+                          <PhoneOff className="mr-1 h-3.5 w-3.5" /> End chat
                         </Button>
                       </div>
                     </div>
@@ -561,71 +841,33 @@ function ChatsPage() {
                 <p className="text-xs text-muted-foreground">{active.reference}</p>
               </div>
 
-              {/* Agent card */}
+              {/* Order details */}
               <div className="mt-4 rounded-xl border border-border bg-background/40 p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Assigned agent
+                <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <Package className="h-3 w-3" /> Order details
                 </p>
-                {active.agentName ? (
-                  <div className="mt-2 flex items-center gap-2.5">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary">
-                      {initials(active.agentName)}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-semibold">{active.agentName}</p>
-                      <p className="text-[10px] text-muted-foreground">Active</p>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="mt-2 text-xs text-muted-foreground">Unassigned</p>
-                )}
-              </div>
-
-              {/* Session info */}
-              <div className="mt-3 rounded-xl border border-border bg-background/40 p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Session info
-                </p>
-                <div className="mt-2 space-y-1">
-                  <div className="flex justify-between text-xs">
-                    <span className="text-muted-foreground">Queued</span>
-                    <span>{formatTs(active.queuedAt)}</span>
-                  </div>
-                  {active.acceptedAt && (
-                    <div className="flex justify-between text-xs">
-                      <span className="text-muted-foreground">Accepted</span>
-                      <span>{formatTs(active.acceptedAt)}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between text-xs">
-                    <span className="text-muted-foreground">Status</span>
-                    <span className="capitalize">{active.status}</span>
-                  </div>
+                <div className="mt-2.5">
+                  <OrderDetails order={orderInfo} fallbackReference={active.reference} />
                 </div>
               </div>
 
-              {/* Quick actions */}
-              <div className="mt-3">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Quick actions
-                </p>
-                <div className="mt-2 grid grid-cols-2 gap-1.5">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-[11px]"
-                    onClick={() => toast.info("Focus the whisper box to send a tip.")}
-                  >
-                    <Megaphone className="mr-1 h-3 w-3" /> Whisper
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 border-rose-400/60 text-[11px] text-rose-600 hover:bg-rose-500/10 dark:text-rose-400"
-                    onClick={handleBarge}
-                  >
-                    <ShieldAlert className="mr-1 h-3 w-3" /> Barge
-                  </Button>
+              {/* Agent + session status (compact) */}
+              <div className="mt-3 rounded-xl border border-border bg-background/40 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-muted-foreground">Handled by</span>
+                  <span className="text-xs font-semibold">
+                    {active.agentName ?? "Unassigned"}
+                  </span>
+                </div>
+                <div className="mt-1.5 flex items-center justify-between">
+                  <span className="text-[11px] text-muted-foreground">Status</span>
+                  <span className="text-xs font-medium capitalize">{active.status}</span>
+                </div>
+                <div className="mt-1.5 flex items-center justify-between">
+                  <span className="text-[11px] text-muted-foreground">Accepted</span>
+                  <span className="text-xs">
+                    {active.acceptedAt ? formatTs(active.acceptedAt) : "—"}
+                  </span>
                 </div>
               </div>
 
@@ -648,6 +890,58 @@ function ChatsPage() {
           )}
         </GlassCard>
       </div>
+
+      <AlertDialog open={bargeConfirmOpen} onOpenChange={setBargeConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <div className="mb-1 flex h-11 w-11 items-center justify-center rounded-full bg-rose-500/15 text-rose-600 dark:text-rose-400">
+              <ShieldAlert className="h-5 w-5" />
+            </div>
+            <AlertDialogTitle>Take over this conversation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You'll start replying directly to{" "}
+              <span className="font-medium text-foreground">{active?.customerName}</span>. The
+              customer will be notified that a supervisor has joined, and your messages will be
+              visible to them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmBarge}
+              className="bg-rose-600 text-white hover:bg-rose-700 focus-visible:ring-rose-500"
+            >
+              <ShieldAlert className="mr-1.5 h-4 w-4" /> Barge in
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={endConfirmOpen} onOpenChange={setEndConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <div className="mb-1 flex h-11 w-11 items-center justify-center rounded-full bg-rose-500/15 text-rose-600 dark:text-rose-400">
+              <PhoneOff className="h-5 w-5" />
+            </div>
+            <AlertDialogTitle>End this chat?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will end the live session with{" "}
+              <span className="font-medium text-foreground">{active?.customerName}</span>. The
+              customer will be asked to rate their experience, and a ticket will be created from the
+              transcript. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmEndChat}
+              className="bg-rose-600 text-white hover:bg-rose-700 focus-visible:ring-rose-500"
+            >
+              <PhoneOff className="mr-1.5 h-4 w-4" /> End chat
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

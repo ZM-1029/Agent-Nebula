@@ -1,11 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { AppShell } from "@/components/frankie/AppShell";
 import { GlassCard } from "@/components/frankie/GlassCard";
-import { agentsService } from "@/services/agentsService";
+import { liveChatService } from "@/services/liveChatService";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { ChevronDown, MessageSquareText, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { MessageSquareText, Loader2, Clock } from "lucide-react";
 
 export const Route = createFileRoute("/ticket-queue")({
   head: () => ({
@@ -13,14 +11,12 @@ export const Route = createFileRoute("/ticket-queue")({
       { title: "Session Queue List — Frankie" },
       {
         name: "description",
-        content: "Session queue list with agent pickup and response performance.",
+        content: "Customers waiting for a live agent — pick one to accept.",
       },
     ],
   }),
   component: SessionQueue,
 });
-
-const ranges = ["Last 7 days", "Last 30 days", "Last 90 days"] as const;
 
 function initials(name: string) {
   return name
@@ -31,27 +27,41 @@ function initials(name: string) {
     .toUpperCase();
 }
 
-function statusDotClass(status: string) {
-  const s = status.toLowerCase();
-  return s === "online"
-    ? "bg-emerald-500"
-    : s === "busy"
-      ? "bg-amber-500"
-      : s === "away"
-        ? "bg-amber-400"
-        : "bg-muted-foreground/40";
+/** Whole minutes a customer has waited since joining the queue. */
+function waitMinutes(queuedAt: string) {
+  const ms = Date.now() - new Date(queuedAt).getTime();
+  return Math.max(0, Math.floor(ms / 60000));
+}
+
+function formatWait(mins: number) {
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  return `${h}h ${mins % 60}m`;
 }
 
 function SessionQueue() {
-  const [range, setRange] = useState<(typeof ranges)[number]>("Last 30 days");
   const navigate = useNavigate();
 
-  const { data: agents = [], isLoading } = useQuery({
-    queryKey: ["agents"],
-    queryFn: () => agentsService.getAll(),
+  const {
+    data: queue = [],
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
+    queryKey: ["session-queue"],
+    queryFn: () => liveChatService.getQueue(),
     retry: 1,
-    refetchInterval: 30_000,
+    refetchInterval: 10_000,
   });
+
+  // Hand the chosen session to the Live Chats workspace, which accepts it over
+  // its live hub connection (so the agent lands in an active conversation).
+  const accept = (sessionId: string) => {
+    sessionStorage.setItem("pendingAcceptSession", sessionId);
+    navigate({ to: "/live-chats" });
+  };
 
   return (
     <AppShell>
@@ -62,22 +72,20 @@ function SessionQueue() {
           </div>
           <h1 className="text-3xl font-bold tracking-tight">Session Queue List</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Pickup speed and response times across your support team.
+            Customers waiting for a live agent — pick one to accept.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <FilterPill>
-            <select
-              value={range}
-              onChange={(e) => setRange(e.target.value as (typeof ranges)[number])}
-              className="cursor-pointer appearance-none bg-transparent pr-5 text-xs font-semibold outline-none"
-            >
-              {ranges.map((r) => (
-                <option key={r}>{r}</option>
-              ))}
-            </select>
-          </FilterPill>
+          <span className="rounded-full border border-white/70 bg-white/60 px-4 py-2 text-xs font-semibold text-foreground/80 backdrop-blur">
+            {queue.length} waiting
+          </span>
+          <button
+            onClick={() => refetch()}
+            className="rounded-full border border-white/70 bg-white/60 px-4 py-2 text-xs font-semibold text-foreground/80 backdrop-blur transition hover:bg-white/80"
+          >
+            {isFetching ? "Refreshing…" : "Refresh"}
+          </button>
         </div>
       </div>
 
@@ -86,114 +94,86 @@ function SessionQueue() {
           <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="border-b border-white/60 text-left text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
-                <th className="px-6 py-4 font-semibold">Name</th>
-                <th className="px-4 py-4 font-semibold">Status</th>
-                <th className="px-4 py-4 font-semibold">Active chats</th>
-                <th className="px-4 py-4 font-semibold">Role</th>
-                <th className="px-6 py-4 font-semibold">Last seen</th>
+                <th className="px-6 py-4 font-semibold">Customer</th>
+                <th className="px-4 py-4 font-semibold">Reference</th>
+                <th className="px-4 py-4 font-semibold">Issue</th>
+                <th className="px-4 py-4 font-semibold">Waiting</th>
                 <th className="px-6 py-4 font-semibold text-right">Action</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={6} className="py-10 text-center">
+                  <td colSpan={5} className="py-10 text-center">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
                   </td>
                 </tr>
-              ) : agents.length === 0 ? (
+              ) : isError ? (
                 <tr>
-                  <td colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
-                    No agents found.
+                  <td colSpan={5} className="py-10 text-center text-sm text-destructive">
+                    Couldn't load the queue.
+                  </td>
+                </tr>
+              ) : queue.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                    No customers waiting in the queue.
                   </td>
                 </tr>
               ) : (
-                agents.map((a) => (
-                  <tr
-                    key={a.id}
-                    onClick={() =>
-                      navigate({ to: "/ticket-queue/$agentId", params: { agentId: a.id } })
-                    }
-                    className="group relative cursor-pointer border-b border-dashed border-foreground/10 last:border-0 transition"
-                  >
-                    <td className="relative px-6 py-4">
-                      <span className="pointer-events-none absolute inset-y-2 left-0 w-[3px] rounded-r-full bg-gradient-to-b from-brand to-sky opacity-0 transition group-hover:opacity-100" />
-                      <div className="flex items-center gap-3">
-                        <div className="relative">
-                          {a.avatarUrl ? (
-                            <img
-                              src={a.avatarUrl}
-                              alt={a.name}
-                              className="h-11 w-11 rounded-full object-cover ring-2 ring-white shadow-[0_4px_14px_-4px_rgba(0,0,0,0.18)]"
-                            />
-                          ) : (
-                            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary ring-2 ring-white">
-                              {initials(a.name)}
-                            </span>
-                          )}
-                          <span
-                            className={cn(
-                              "absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white",
-                              statusDotClass(a.status),
-                            )}
-                          />
+                queue.map((q) => {
+                  const wait = waitMinutes(q.queuedAt);
+                  return (
+                    <tr
+                      key={q.id}
+                      className="border-b border-dashed border-foreground/10 last:border-0"
+                    >
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-amber/20 text-xs font-bold text-amber ring-2 ring-white">
+                            {initials(q.customerName)}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="text-[14px] font-semibold tracking-tight">
+                              {q.customerName}
+                            </div>
+                            <div className="text-[11px] text-muted-foreground">
+                              #{q.position} in queue
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <div className="text-[14px] font-semibold tracking-tight">{a.name}</div>
-                          <div className="text-[11px] text-muted-foreground">{a.email}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <span className="capitalize text-[13px]">{a.status.toLowerCase()}</span>
-                    </td>
-                    <td className="px-4 py-4">
-                      <span className="font-mono text-[15px] font-medium tabular-nums">
-                        {a.activeChats ?? "—"}
-                      </span>
-                    </td>
-                    <td className="px-4 py-4">
-                      <span className="text-[13px]">{a.role}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="text-[13px] text-muted-foreground">
-                        {a.lastSeenAt
-                          ? new Date(a.lastSeenAt).toLocaleString([], {
-                              dateStyle: "short",
-                              timeStyle: "short",
-                            })
-                          : "—"}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate({ to: "/live-chats" });
-                        }}
-                        className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-br from-brand to-[oklch(0.78_0.16_155)] px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-[0_8px_22px_-10px_rgba(87,184,92,0.9)] transition hover:brightness-105"
-                      >
-                        <MessageSquareText className="h-3.5 w-3.5" />
-                        Start chat
-                      </button>
-                    </td>
-                    <td className="pointer-events-none absolute inset-0 -z-10 rounded-2xl bg-white/0 transition group-hover:bg-white/70 group-hover:shadow-[0_12px_36px_-18px_rgba(15,23,42,0.35)]" />
-                  </tr>
-                ))
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className="font-mono text-[12px]">{q.reference}</span>
+                      </td>
+                      <td className="max-w-[280px] px-4 py-4">
+                        <span className="line-clamp-2 text-[13px] text-foreground/70">
+                          {q.issueDescription || "—"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber/15 px-2 py-0.5 font-mono text-[11px] font-bold text-amber">
+                          <Clock className="h-3 w-3" />
+                          {formatWait(wait)}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          onClick={() => accept(q.id)}
+                          className="inline-flex items-center gap-1.5 rounded-full bg-gradient-to-br from-brand to-[oklch(0.78_0.16_155)] px-3.5 py-1.5 text-[12px] font-semibold text-white shadow-[0_8px_22px_-10px_rgba(87,184,92,0.9)] transition hover:brightness-105"
+                        >
+                          <MessageSquareText className="h-3.5 w-3.5" />
+                          Accept chat
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
       </GlassCard>
     </AppShell>
-  );
-}
-
-function FilterPill({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="relative flex items-center gap-2 rounded-full border border-white/70 bg-white/60 px-4 py-2 text-xs font-semibold text-foreground/80 backdrop-blur transition hover:bg-white/80">
-      {children}
-      <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-3 w-3 -translate-y-1/2 opacity-60" />
-    </div>
   );
 }

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { User, Lock, MessageSquareText, Loader2, Trash2, Check, X } from "lucide-react";
 import { toast } from "sonner";
 import { accountService } from "@/services/accountService";
+import { agentsService, type Agent } from "@/services/agentsService";
 import { useAuth } from "@/hooks/use-auth";
 import { useCannedReplies } from "@/lib/canned-replies";
 
@@ -100,6 +101,7 @@ function Profile() {
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [account, setAccount] = useState<Agent | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -114,6 +116,23 @@ function Profile() {
         setLastName(parts.slice(1).join(" "));
         setEmail(me.email ?? "");
         setPhone(me.phone ?? "");
+        // Pull the full agent record for the read-only account overview
+        // (active chats + last seen aren't on the /me payload).
+        agentsService
+          .getById(me.id)
+          .then((a) => !cancelled && setAccount(a))
+          .catch(() => {
+            if (!cancelled)
+              setAccount({
+                id: me.id,
+                name: me.name,
+                email: me.email,
+                role: me.role,
+                status: me.status,
+                avatarUrl: me.avatarUrl,
+                lastSeenAt: null,
+              });
+          });
       })
       .catch(() => {
         const parts = (user?.displayName ?? "").trim().split(" ");
@@ -178,6 +197,59 @@ function Profile() {
           Save changes
         </button>
       </div>
+
+      {/* Read-only account overview */}
+      <div className="mt-8 border-t border-foreground/10 pt-5">
+        <h3 className="text-sm font-semibold">Account details</h3>
+        <p className="text-xs text-muted-foreground">Read-only — managed by your workspace.</p>
+        <dl className="mt-4 grid gap-x-8 gap-y-1 text-sm sm:grid-cols-2">
+          <DetailRow
+            label="Agent ID"
+            value={account ? account.id.slice(0, 8).toUpperCase() : "—"}
+            mono
+          />
+          <DetailRow label="Role" value={account?.role ?? "—"} />
+          <DetailRow label="Status" value={account?.status ?? "—"} capitalize />
+          <DetailRow
+            label="Active chats"
+            value={account?.activeChats != null ? String(account.activeChats) : "—"}
+          />
+          <DetailRow
+            label="Last seen"
+            value={
+              account?.lastSeenAt
+                ? new Date(account.lastSeenAt).toLocaleString([], {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })
+                : "—"
+            }
+          />
+        </dl>
+      </div>
+    </div>
+  );
+}
+
+function DetailRow({
+  label,
+  value,
+  mono,
+  capitalize,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  capitalize?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between border-b border-dashed border-foreground/10 py-2">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd
+        className={`font-medium ${mono ? "font-mono text-xs" : ""} ${capitalize ? "capitalize" : ""}`}
+      >
+        {value}
+      </dd>
     </div>
   );
 }

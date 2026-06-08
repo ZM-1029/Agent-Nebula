@@ -3,7 +3,7 @@
  * All live-chat service modules import from here so the JWT key is in one place.
  */
 
-export const API_BASE = "http://150.241.246.64:588";
+export const API_BASE = "http://150.241.246.64:550";
 
 export const JWT_KEY = "frankie_jwt";
 export const REFRESH_KEY = "frankie_refresh_token";

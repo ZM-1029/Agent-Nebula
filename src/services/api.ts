@@ -1,4 +1,4 @@
-const BASE = "http://150.241.246.64:588/api/dashboard";
+const BASE = "http://150.241.246.64:550/api/dashboard";
 
 export interface EndpointBreakdownItem {
   endpoint: string;

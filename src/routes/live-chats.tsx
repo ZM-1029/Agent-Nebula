@@ -27,8 +27,11 @@ import {
   type ActiveSession,
   type ChatMessage,
   type QueueItem,
+  type OrderSnapshot,
 } from "@/services/liveChatService";
+import { OrderDetails } from "@/components/order-details";
 import { agentsService, type Agent } from "@/services/agentsService";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { useCannedReplies } from "@/lib/canned-replies";
 import * as signalR from "@microsoft/signalr";
@@ -95,6 +98,7 @@ function formatWait(minutes: number): string {
 
 function LiveChats() {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const agentId = user?.id ?? "";
 
   const [sessions, setSessions] = useState<ActiveSession[]>([]);
@@ -118,23 +122,34 @@ function LiveChats() {
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const typingActiveRef = useRef(false);
   const customerTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Monotonic counter so out-of-order session fetches can't clobber newer data.
+  const fetchSeqRef = useRef(0);
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
 
   // ── Load sessions ────────────────────────────────────────────────────────
   const fetchSessions = useCallback(async () => {
+    const seq = ++fetchSeqRef.current;
     try {
       const data = agentId
         ? await liveChatService.getAgentSessions(agentId)
         : await liveChatService.getActiveSessions();
+      // Drop this result if a newer fetch has since started (prevents a slow,
+      // stale response from overwriting fresher session data).
+      if (seq !== fetchSeqRef.current) return;
       setSessions(data);
-      if (!activeId && data.length > 0) setActiveId(data[0].id);
+      // Keep the open chat if it's still active; otherwise fall to the first
+      // remaining one (or none). This makes an ended chat close on its own
+      // instead of lingering until a manual refresh.
+      setActiveId((prev) =>
+        prev && data.some((s) => s.id === prev) ? prev : (data[0]?.id ?? null),
+      );
     } catch {
       /* ignore — hub events will keep data fresh */
     } finally {
       setLoading(false);
     }
-  }, [agentId, activeId]);
+  }, [agentId]);
 
   // ── Load queue depth (for the Accept-next-chat control) ───────────────────
   const fetchQueue = useCallback(async () => {
@@ -228,8 +243,37 @@ function LiveChats() {
       fetchSessions();
     });
 
+    // The customer (or a supervisor) ended a chat we're in. Refresh so the
+    // resolved session drops out of our list and the open pane closes on its
+    // own — no manual refresh needed.
+    hub.on(HubEvents.ChatEnded, () => {
+      toast.info("This chat was ended.");
+      fetchSessions();
+    });
+
     hub.on(HubEvents.QueueEmpty, () => {
       setQueue([]);
+    });
+
+    // Auto-assign pushed a chat to THIS agent — open it and prompt to respond.
+    hub.on(
+      HubEvents.ChatAutoAssigned,
+      async (payload?: { sessionId?: string; customerName?: string }) => {
+        toast.warning(
+          `New chat assigned${payload?.customerName ? ` — ${payload.customerName}` : ""}. Please respond now.`,
+        );
+        await fetchSessions();
+        if (payload?.sessionId) {
+          setActiveId(payload.sessionId);
+          setMobilePane("chat");
+        }
+      },
+    );
+
+    // Auto-assign reclaimed a chat we didn't respond to in time.
+    hub.on(HubEvents.ChatReassigned, () => {
+      toast.info("A chat was reassigned (no response in time).");
+      fetchSessions();
     });
 
     // A chat was transferred to THIS agent.
@@ -265,6 +309,8 @@ function LiveChats() {
     hub.on(HubEvents.AgentStatusChanged, (changedAgentId?: string, status?: string) => {
       if (agentId && changedAgentId === agentId && status) {
         setMyStatus(status as AgentStatus);
+        // Keep the profile dropdown (/api/auth/me) in sync with the selector.
+        queryClient.invalidateQueries({ queryKey: ["me"] });
       }
     });
 
@@ -368,6 +414,49 @@ function LiveChats() {
     }
   };
 
+  // ── Accept a SPECIFIC queued chat (cherry-pick) ──────────────────────────
+  const acceptSpecific = useCallback(
+    async (sessionId: string) => {
+      if (!agentId || !sessionId) return;
+      if (hubRef.current?.state !== signalR.HubConnectionState.Connected) {
+        toast.error("Not connected to the live-chat server.");
+        return;
+      }
+      setAccepting(true);
+      try {
+        const res = (await hubRef.current.invoke(
+          HubMethods.AcceptChat,
+          sessionId,
+          agentId,
+        )) as { id?: string; customerName?: string } | null;
+        if (res?.id) {
+          toast.success(`Chat accepted — ${res.customerName ?? "customer"}.`);
+          await fetchSessions();
+          setActiveId(res.id);
+          setMobilePane("chat");
+        } else {
+          toast.info("That chat was just taken by another agent.");
+        }
+      } catch {
+        toast.error("Couldn't accept that chat.");
+      } finally {
+        setAccepting(false);
+      }
+    },
+    [agentId, fetchSessions],
+  );
+
+  // Handle a cherry-pick handed off from the Session Queue page: it stores the
+  // chosen session id then routes here, where we accept it over the live hub.
+  useEffect(() => {
+    if (hubState !== "connected" || !agentId) return;
+    const pending = sessionStorage.getItem("pendingAcceptSession");
+    if (pending) {
+      sessionStorage.removeItem("pendingAcceptSession");
+      acceptSpecific(pending);
+    }
+  }, [hubState, agentId, acceptSpecific]);
+
   // ── Resolve the active chat (auto-creates a ticket on the backend) ────────
   const resolveActive = async () => {
     if (!activeId || !agentId) return;
@@ -409,6 +498,8 @@ function LiveChats() {
       } else {
         await agentsService.updateStatus(agentId, status);
       }
+      // Refresh the profile dropdown so it matches the selector immediately.
+      queryClient.invalidateQueries({ queryKey: ["me"] });
     } catch {
       setMyStatus(prev);
       toast.error("Couldn't update your status.");
@@ -433,6 +524,7 @@ function LiveChats() {
             queue={queue}
             accepting={accepting}
             onAcceptNext={acceptNext}
+            onAcceptChat={acceptSpecific}
             myStatus={myStatus}
             onStatusChange={changeStatus}
           />
@@ -491,6 +583,7 @@ function ConvList({
   queue,
   accepting,
   onAcceptNext,
+  onAcceptChat,
   myStatus,
   onStatusChange,
 }: {
@@ -502,6 +595,7 @@ function ConvList({
   queue: QueueItem[];
   accepting: boolean;
   onAcceptNext: () => void;
+  onAcceptChat: (id: string) => void;
   myStatus: AgentStatus;
   onStatusChange: (s: AgentStatus) => void;
 }) {
@@ -602,6 +696,13 @@ function ConvList({
                         {q.issueDescription}
                       </div>
                     )}
+                    <button
+                      onClick={() => onAcceptChat(q.id)}
+                      disabled={accepting}
+                      className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-gradient-to-br from-brand to-[oklch(0.78_0.16_155)] px-2.5 py-1 text-[11px] font-semibold text-white shadow-[0_6px_18px_-8px_rgba(87,184,92,0.9)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <MessageSquare className="h-3 w-3" /> Accept
+                    </button>
                   </div>
                 </div>
               );
@@ -1039,6 +1140,13 @@ function ProfilePane({ session, onBack }: { session: ActiveSession | null; onBac
     .slice(0, 2)
     .toUpperCase();
 
+  let orderInfo: OrderSnapshot | null = null;
+  try {
+    orderInfo = session.orderSnapshot ? (JSON.parse(session.orderSnapshot) as OrderSnapshot) : null;
+  } catch {
+    orderInfo = null;
+  }
+
   return (
     <GlassCard className="scrollbar-thin h-full overflow-y-auto p-5">
       {onBack && (
@@ -1068,6 +1176,10 @@ function ProfilePane({ session, onBack }: { session: ActiveSession | null; onBac
           </span>
         </div>
       </div>
+
+      <Section title="Order details">
+        <OrderDetails order={orderInfo} fallbackReference={session.reference} />
+      </Section>
 
       <Section title="Session info">
         <ul className="space-y-2 text-xs">

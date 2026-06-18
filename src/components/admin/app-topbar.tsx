@@ -120,7 +120,10 @@ export function AppTopbar({ onOpenMobileNav }: { onOpenMobileNav?: () => void })
             )}
           </button>
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-80 glass-strong border-0 p-0">
+        <PopoverContent
+          align="end"
+          className="w-80 border border-border bg-popover p-0 text-popover-foreground shadow-xl"
+        >
           <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
             <div>
               <p className="text-sm font-semibold">Notifications</p>
@@ -211,7 +214,10 @@ export function AppTopbar({ onOpenMobileNav }: { onOpenMobileNav?: () => void })
             )}
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="glass-strong border-0">
+        <DropdownMenuContent
+          align="end"
+          className="border border-border bg-popover text-popover-foreground shadow-xl"
+        >
           <DropdownMenuLabel>Theme</DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => setTheme("light")}>
@@ -243,7 +249,10 @@ export function AppTopbar({ onOpenMobileNav }: { onOpenMobileNav?: () => void })
             <ChevronDown className="hidden h-3.5 w-3.5 text-muted-foreground sm:block" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="glass-strong w-64 border-0 p-0">
+        <DropdownMenuContent
+          align="end"
+          className="w-64 border border-border bg-popover p-0 text-popover-foreground shadow-xl"
+        >
           {/* Identity header */}
           <div className="flex items-center gap-3 p-3">
             <span className="relative flex h-10 w-10 items-center justify-center rounded-xl gradient-primary text-sm font-semibold text-primary-foreground">

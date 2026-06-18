@@ -124,6 +124,12 @@ function LiveChats() {
   const customerTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Monotonic counter so out-of-order session fetches can't clobber newer data.
   const fetchSeqRef = useRef(0);
+  // Current open chat id, mirrored into a ref so SignalR handlers (registered
+  // once) always read the latest value and route messages to the right chat.
+  const activeIdRef = useRef<string | null>(null);
+  // Mirror of sessions kept in a ref so the onreconnected handler (registered
+  // once at mount) can see the live list without a stale closure.
+  const sessionsRef = useRef<ActiveSession[]>([]);
 
   const activeSession = sessions.find((s) => s.id === activeId) ?? null;
 
@@ -192,6 +198,14 @@ function LiveChats() {
   // and whenever the agent opens a different chat — otherwise messages only show
   // after a manual refresh.
   useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  useEffect(() => {
     if (!activeId || hubState !== "connected") return;
     hubRef.current?.invoke(HubMethods.RejoinSession, activeId).catch(() => {});
   }, [activeId, hubState]);
@@ -202,9 +216,12 @@ function LiveChats() {
     hubRef.current = hub;
 
     hub.on(HubEvents.MessageReceived, (msg: ChatMessage) => {
+      // The agent's connection is in every session group they handle, so this
+      // fires for ALL their chats. Only apply messages for the OPEN chat —
+      // otherwise messages leak across conversations.
+      if (msg.sessionId && msg.sessionId !== activeIdRef.current) return;
       // A new message means the customer is no longer mid-typing.
       if (msg.senderType?.toLowerCase() === "customer") setCustomerTyping(false);
-      // Only append if it belongs to the currently open session
       setMessages((prev) => {
         // avoid duplicates (SignalR may replay on reconnect)
         const already = prev.some(
@@ -318,7 +335,13 @@ function LiveChats() {
       setHubState("connected");
       fetchSessions();
       fetchQueue();
-      if (agentId) hub.invoke(HubMethods.AgentConnect, agentId).catch(() => {});
+      if (agentId) {
+        hub.invoke(HubMethods.AgentConnect, agentId).catch(() => {});
+        // Reconnect gets a new connection ID — re-join all active session groups.
+        sessionsRef.current.forEach((s) =>
+          hub.invoke(HubMethods.RejoinSession, s.id).catch(() => {})
+        );
+      }
     });
 
     hub.onclose(() => setHubState("disconnected"));

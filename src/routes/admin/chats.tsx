@@ -177,6 +177,9 @@ function ChatsPage() {
   const hubRef = useRef<signalR.HubConnection | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirror the open session id so the (once-registered) SignalR handlers route
+  // messages to the right chat — the admin connection is in multiple session groups.
+  const activeIdRef = useRef<string | null>(null);
   // True while the supervisor is typing in the barge composer. The server
   // broadcasts AgentTyping to the whole session (caller included), so we use
   // this to ignore our own echoed typing event in the admin transcript.
@@ -194,10 +197,26 @@ function ChatsPage() {
     hubRef.current = hub;
 
     hub.onreconnecting(() => setHubStatus("connecting"));
-    hub.onreconnected(() => setHubStatus("connected"));
+    hub.onreconnected(() => {
+      setHubStatus("connected");
+      // Reconnect gets a new connection ID — re-join the admins group and any
+      // barged session groups so messages keep flowing without a page refresh.
+      hub.invoke(HubMethods.JoinAdminRoom).catch(() => {});
+      try {
+        const bargedMap: Record<string, boolean> = JSON.parse(
+          localStorage.getItem(BARGED_KEY) ?? "{}"
+        );
+        Object.keys(bargedMap).forEach((id) =>
+          hub.invoke(HubMethods.RejoinSession, id).catch(() => {})
+        );
+      } catch {}
+    });
     hub.onclose(() => setHubStatus("disconnected"));
 
     hub.on(HubEvents.MessageReceived, (msg: ChatMessage) => {
+      // The admin connection is in every session group it has viewed, so this
+      // fires for multiple chats. Only apply messages for the OPEN session.
+      if (msg.sessionId && msg.sessionId !== activeIdRef.current) return;
       // A delivered message clears the matching typing indicator.
       setTypingActor(null);
       setMessages((prev) => {
@@ -257,6 +276,11 @@ function ChatsPage() {
       hub.stop();
     };
   }, [queryClient]);
+
+  // Keep the open-session ref in sync for the SignalR message router.
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
 
   // Auto-select first session
   useEffect(() => {

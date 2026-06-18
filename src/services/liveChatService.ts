@@ -54,6 +54,8 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   isWhisper?: boolean;
+  /** Present on real-time MessageReceived events — used to route to the right chat. */
+  sessionId?: string;
 }
 
 export interface SessionDetail {

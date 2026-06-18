@@ -1,4 +1,4 @@
-const BASE = "http://150.241.246.64:550/api/dashboard";
+const BASE = "https://furdecochatbot-bqf2g9h3b4fpfag4.canadacentral-01.azurewebsites.net/api/dashboard";
 
 export interface EndpointBreakdownItem {
   endpoint: string;

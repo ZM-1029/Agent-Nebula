@@ -3,7 +3,7 @@
  * All live-chat service modules import from here so the JWT key is in one place.
  */
 
-export const API_BASE = "http://150.241.246.64:550";
+export const API_BASE = "https://furdecochatbot-bqf2g9h3b4fpfag4.canadacentral-01.azurewebsites.net";
 
 export const JWT_KEY = "frankie_jwt";
 export const REFRESH_KEY = "frankie_refresh_token";

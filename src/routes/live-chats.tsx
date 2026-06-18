@@ -309,6 +309,9 @@ function LiveChats() {
       (payload?: { sessionId?: string; content?: string; timestamp?: string }) => {
         if (!payload?.content) return;
         toast("Supervisor whisper", { description: payload.content });
+        // Only render into the open stream if the whisper is for THIS chat —
+        // otherwise it would appear in whatever chat the agent currently has open.
+        if (payload.sessionId && payload.sessionId !== activeIdRef.current) return;
         setMessages((prev) => [
           ...prev,
           {

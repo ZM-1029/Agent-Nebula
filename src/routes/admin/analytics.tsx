@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueries } from "@tanstack/react-query";
 import { useState } from "react";
 import { GlassCard } from "@/components/admin/glass-card";
 import { Button } from "@/components/ui/button";
@@ -9,8 +9,38 @@ import {
 } from "recharts";
 import { Download, FileText, Calendar, Users, CheckCircle2, XCircle, PackageSearch, FileQuestion } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/services/api";
+import { api, type DashboardStats, type HourlyData } from "@/services/api";
 import { cn } from "@/lib/utils";
+import { datesInRange, daysBetween, MAX_RANGE_DAYS } from "@/lib/date-range";
+
+// Sum the per-day KPI counts that drive the summary cards.
+function sumStats(list: DashboardStats[]) {
+  return list.reduce(
+    (acc, s) => ({
+      totalRequests: acc.totalRequests + (s.totalRequests ?? 0),
+      trackLookups: acc.trackLookups + (s.trackLookups ?? 0),
+      ordersFound: acc.ordersFound + (s.ordersFound ?? 0),
+      confirmations: acc.confirmations + (s.confirmations ?? 0),
+      declines: acc.declines + (s.declines ?? 0),
+      instructions: acc.instructions + (s.instructions ?? 0),
+    }),
+    { totalRequests: 0, trackLookups: 0, ordersFound: 0, confirmations: 0, declines: 0, instructions: 0 },
+  );
+}
+
+// Merge per-day hourly buckets into a single 0–23 profile for the range.
+function sumHourly(lists: HourlyData[][]): HourlyData[] {
+  const map = new Map<number, HourlyData>();
+  for (const list of lists) {
+    for (const h of list) {
+      const e = map.get(h.hour) ?? { hour: h.hour, label: h.label, requests: 0, tracks: 0, avgMs: 0 };
+      e.requests += h.requests;
+      e.tracks += h.tracks;
+      map.set(h.hour, e);
+    }
+  }
+  return [...map.values()].sort((a, b) => a.hour - b.hour);
+}
 
 export const Route = createFileRoute("/admin/analytics")({
   head: () => ({
@@ -22,11 +52,8 @@ export const Route = createFileRoute("/admin/analytics")({
   component: AnalyticsPage,
 });
 
-const AUTO = "auto";
-
 function AnalyticsPage() {
   const today = new Date().toISOString().split("T")[0];
-  const [selectedDate, setSelectedDate] = useState<string>(AUTO);
 
   const { data: availableDates = [] } = useQuery({
     queryKey: ["available-dates"],
@@ -34,27 +61,50 @@ function AnalyticsPage() {
     retry: 1,
   });
 
-  const activeDate = selectedDate === AUTO ? (availableDates[0] ?? today) : selectedDate;
+  // Default the range to the most recent day with data (falls back to today),
+  // so the page loads with the same figures it showed before ranges existed.
+  const mostRecent = availableDates[0] ?? today;
+  const [fromDate, setFromDate] = useState<string>("");
+  const [toDate, setToDate] = useState<string>("");
+  const activeFrom = (fromDate || mostRecent) <= (toDate || mostRecent) ? (fromDate || mostRecent) : (toDate || mostRecent);
+  const activeTo = (fromDate || mostRecent) <= (toDate || mostRecent) ? (toDate || mostRecent) : (fromDate || mostRecent);
+  const isRange = activeFrom !== activeTo;
+  const rangeLabel = isRange ? `${activeFrom} → ${activeTo}` : activeFrom;
 
-  const { data: history = [] } = useQuery({
-    queryKey: ["analytics-history"],
-    queryFn: () => api.getHistory(14),
+  // Days in the range that actually have data — capped to keep the fan-out sane.
+  const dataDays = new Set([...availableDates, today]);
+  const rangeDates = datesInRange(activeFrom, activeTo)
+    .filter((d) => dataDays.has(d))
+    .slice(0, MAX_RANGE_DAYS);
+  const rangeTooBig = daysBetween(activeFrom, activeTo) + 1 > MAX_RANGE_DAYS;
+
+  // History covers enough days to reach the start of the range (clamped), then
+  // we slice it to the selected window for the chart and table.
+  const historyDays = Math.min(Math.max(daysBetween(activeFrom, today) + 1, 14), 90);
+  const { data: allHistory = [] } = useQuery({
+    queryKey: ["analytics-history", historyDays],
+    queryFn: () => api.getHistory(historyDays),
     retry: 1,
   });
+  const history = allHistory.filter((d) => d.date >= activeFrom && d.date <= activeTo);
 
-  const { data: hourly = [] } = useQuery({
-    queryKey: ["analytics-hourly", activeDate],
-    queryFn: () => api.getHourly(activeDate),
-    retry: 1,
-    enabled: !!activeDate,
+  const hourlyQueries = useQueries({
+    queries: rangeDates.map((d) => ({
+      queryKey: ["analytics-hourly", d],
+      queryFn: () => api.getHourly(d),
+      retry: 1,
+    })),
   });
+  const hourly = sumHourly(hourlyQueries.map((q) => q.data ?? []));
 
-  const { data: stats } = useQuery({
-    queryKey: ["analytics-stats", activeDate],
-    queryFn: () => api.getStats(activeDate),
-    retry: 1,
-    enabled: !!activeDate,
+  const statsQueries = useQueries({
+    queries: rangeDates.map((d) => ({
+      queryKey: ["analytics-stats", d],
+      queryFn: () => api.getStats(d),
+      retry: 1,
+    })),
   });
+  const stats = sumStats(statsQueries.map((q) => q.data).filter(Boolean) as DashboardStats[]);
 
   function exportCSV() {
     const headers = ["Date", "Interactions", "Orders Tracked", "Confirmed", "Declined", "OTP Sent", "Success Rate"];
@@ -66,7 +116,7 @@ function AnalyticsPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `analytics-${activeDate}.csv`;
+    a.download = isRange ? `analytics_${activeFrom}_to_${activeTo}.csv` : `analytics_${activeFrom}.csv`;
     a.click();
     URL.revokeObjectURL(url);
     toast.success("CSV downloaded");
@@ -93,14 +143,13 @@ function AnalyticsPage() {
       tracked: h.tracks,
     }));
 
-  // Business KPIs for selected date
-  const totalInteractions = stats?.totalRequests ?? 0;
-  const trackLookups = stats?.trackLookups ?? 1; // avoid div by zero
-  const ordersFound = stats?.ordersFound ?? 0;
-  const foundRate = stats?.trackLookups ? Math.round((ordersFound / stats.trackLookups) * 100) : 0;
-  const confirmed = stats?.confirmations ?? 0;
-  const declined = stats?.declines ?? 0;
-  const descriptionRequests = stats?.instructions ?? 0;
+  // Business KPIs for the selected range (summed across each day).
+  const totalInteractions = stats.totalRequests;
+  const ordersFound = stats.ordersFound;
+  const foundRate = stats.trackLookups ? Math.round((ordersFound / stats.trackLookups) * 100) : 0;
+  const confirmed = stats.confirmations;
+  const declined = stats.declines;
+  const descriptionRequests = stats.instructions;
 
   return (
     <div className="space-y-4">
@@ -115,17 +164,28 @@ function AnalyticsPage() {
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2 rounded-xl border border-border bg-background/60 px-3 py-1.5 text-sm shadow-sm">
             <Calendar className="h-4 w-4 text-muted-foreground" />
-            <select
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
+            <input
+              type="date"
+              value={activeFrom}
+              max={activeTo}
+              onChange={(e) => setFromDate(e.target.value)}
               className="bg-transparent text-sm outline-none"
-            >
-              <option value={AUTO}>Most recent ({availableDates[0] ?? today})</option>
-              {availableDates.map((d) => (
-                <option key={d} value={d}>{d}{d === today ? " (today)" : ""}</option>
-              ))}
-            </select>
+              aria-label="From date"
+            />
+            <span className="text-xs text-muted-foreground">to</span>
+            <input
+              type="date"
+              value={activeTo}
+              min={activeFrom}
+              max={today}
+              onChange={(e) => setToDate(e.target.value)}
+              className="bg-transparent text-sm outline-none"
+              aria-label="To date"
+            />
           </div>
+          {rangeTooBig && (
+            <span className="text-xs text-amber-600">capped to {MAX_RANGE_DAYS} days</span>
+          )}
           <Button variant="outline" size="sm" onClick={exportCSV}>
             <Download className="mr-1.5 h-3.5 w-3.5" /> CSV
           </Button>
@@ -144,7 +204,7 @@ function AnalyticsPage() {
           <div>
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Total Interactions</p>
             <p className="text-2xl font-semibold tracking-tight">{totalInteractions.toLocaleString()}</p>
-            <p className="text-[11px] text-muted-foreground">{activeDate}</p>
+            <p className="text-[11px] text-muted-foreground">{rangeLabel}</p>
           </div>
         </GlassCard>
 
@@ -155,7 +215,7 @@ function AnalyticsPage() {
           <div>
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Order Found Rate</p>
             <p className="text-2xl font-semibold tracking-tight">{foundRate}%</p>
-            <p className="text-[11px] text-muted-foreground">{ordersFound} of {stats?.trackLookups ?? 0} tracked</p>
+            <p className="text-[11px] text-muted-foreground">{ordersFound} of {stats.trackLookups} tracked</p>
           </div>
         </GlassCard>
 
@@ -198,7 +258,7 @@ function AnalyticsPage() {
         {/* 14-day engagement trend */}
         <GlassCard>
           <p className="text-sm font-semibold">Customer engagement</p>
-          <p className="text-[11px] text-muted-foreground">Daily interactions, confirmed and declined deliveries (14 days)</p>
+          <p className="text-[11px] text-muted-foreground">Daily interactions, confirmed and declined deliveries ({isRange ? "selected range" : "single day"})</p>
           <ResponsiveContainer width="100%" height={220} className="mt-2">
             <AreaChart data={trendData} margin={{ left: -20 }}>
               <defs>
@@ -224,7 +284,7 @@ function AnalyticsPage() {
         {/* Peak interaction hours */}
         <GlassCard>
           <p className="text-sm font-semibold">Peak interaction hours</p>
-          <p className="text-[11px] text-muted-foreground">When customers are most active — {activeDate}</p>
+          <p className="text-[11px] text-muted-foreground">When customers are most active — {rangeLabel}</p>
           {hourlyActivity.length > 0 ? (
             <ResponsiveContainer width="100%" height={220} className="mt-2">
               <BarChart data={hourlyActivity} margin={{ left: -20 }}>
@@ -237,17 +297,17 @@ function AnalyticsPage() {
             </ResponsiveContainer>
           ) : (
             <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
-              No data for {activeDate}
+              No data for {rangeLabel}
             </div>
           )}
         </GlassCard>
       </div>
 
-      {/* 14-day daily activity summary */}
+      {/* Daily activity summary for the selected range */}
       {history.length > 0 && (
         <GlassCard>
           <p className="text-sm font-semibold">Daily activity summary</p>
-          <p className="text-[11px] text-muted-foreground mb-3">Last 14 days — interactions, order lookups and delivery outcomes</p>
+          <p className="text-[11px] text-muted-foreground mb-3">{rangeLabel} — interactions, order lookups and delivery outcomes</p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -262,10 +322,10 @@ function AnalyticsPage() {
               </thead>
               <tbody>
                 {[...history].reverse().map((d) => (
-                  <tr key={d.date} className={cn("border-b border-border/40 hover:bg-accent/30 transition", d.date === activeDate && "bg-primary/5")}>
+                  <tr key={d.date} className={cn("border-b border-border/40 hover:bg-accent/30 transition", !isRange && d.date === activeFrom && "bg-primary/5")}>
                     <td className="p-2 text-xs font-medium">
                       {d.label}
-                      {d.date === activeDate && <span className="ml-2 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">selected</span>}
+                      {!isRange && d.date === activeFrom && <span className="ml-2 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">selected</span>}
                     </td>
                     <td className="p-2 text-right font-semibold">{d.totalRequests.toLocaleString()}</td>
                     <td className="p-2 text-right text-blue-500">{d.trackLookups.toLocaleString()}</td>

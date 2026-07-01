@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueries } from "@tanstack/react-query";
 import { useState } from "react";
 import { GlassCard } from "@/components/admin/glass-card";
 import { OrderDetailModal } from "@/components/admin/order-detail-modal";
@@ -7,6 +7,7 @@ import { api, LogEntry } from "@/services/api";
 import { Download, Search, Calendar, ChevronUp, ChevronDown, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { datesInRange, daysBetween, MAX_RANGE_DAYS } from "@/lib/date-range";
 
 export const Route = createFileRoute("/admin/records")({
   head: () => ({
@@ -68,9 +69,10 @@ function rowTone(entry: LogEntry): string {
 
 function RecordsPage() {
   const today = new Date().toISOString().split("T")[0];
-  const [selectedDate, setSelectedDate] = useState<string>(today);
+  const [fromDate, setFromDate] = useState<string>(today);
+  const [toDate, setToDate] = useState<string>(today);
   const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("time");
+  const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [activeRow, setActiveRow] = useState<LogEntry | null>(null);
 
@@ -80,12 +82,28 @@ function RecordsPage() {
     retry: 1,
   });
 
-  const { data: logs, isLoading } = useQuery({
-    queryKey: ["records-logs", selectedDate],
-    queryFn: () => api.getLogs(selectedDate, 500),
-    retry: 1,
-    refetchInterval: 30_000,
+  // Normalise the range and only fetch days that actually have data (so a wide
+  // range doesn't fire dozens of empty requests). Today is always allowed.
+  const activeFrom = fromDate <= toDate ? fromDate : toDate;
+  const activeTo = fromDate <= toDate ? toDate : fromDate;
+  const dataDays = new Set([...(availableDates ?? []), today]);
+  const rangeDates = datesInRange(activeFrom, activeTo)
+    .filter((d) => dataDays.has(d))
+    .slice(0, MAX_RANGE_DAYS);
+  const rangeTooBig = daysBetween(activeFrom, activeTo) + 1 > MAX_RANGE_DAYS;
+
+  const logQueries = useQueries({
+    queries: rangeDates.map((d) => ({
+      queryKey: ["records-logs", d],
+      queryFn: () => api.getLogs(d, 500),
+      retry: 1,
+      refetchInterval: 30_000,
+    })),
   });
+
+  const isLoading = logQueries.some((q) => q.isLoading);
+  const logs: LogEntry[] = logQueries.flatMap((q) => q.data ?? []);
+  const rangeLabel = activeFrom === activeTo ? activeFrom : `${activeFrom} → ${activeTo}`;
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -110,7 +128,13 @@ function RecordsPage() {
     .sort((a, b) => {
       const av: string = String((a as any)[sortKey] ?? "");
       const bv: string = String((b as any)[sortKey] ?? "");
-      return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+      const primary = sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+      // When sorting by date across a multi-day range, break ties by time so
+      // each day's rows stay in chronological order.
+      if (primary === 0 && sortKey === "date") {
+        return sortDir === "asc" ? a.time.localeCompare(b.time) : b.time.localeCompare(a.time);
+      }
+      return primary;
     });
 
   function exportCsv() {
@@ -131,10 +155,13 @@ function RecordsPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `records-${selectedDate}.csv`;
+    a.download =
+      activeFrom === activeTo
+        ? `records_${activeFrom}.csv`
+        : `records_${activeFrom}_to_${activeTo}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    toast.success("CSV downloaded");
+    toast.success(`CSV downloaded (${filtered.length} records)`);
   }
 
   function SortIcon({ col }: { col: SortKey }) {
@@ -187,22 +214,24 @@ function RecordsPage() {
       <GlassCard className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2 rounded-lg border border-border bg-background/60 px-3 py-1.5">
           <Calendar className="h-4 w-4 text-muted-foreground" />
-          <select
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
+          <input
+            type="date"
+            value={fromDate}
+            max={toDate || today}
+            onChange={(e) => setFromDate(e.target.value)}
             className="bg-transparent text-sm outline-none"
-          >
-            <option value={today} className="bg-popover text-popover-foreground">
-              {today} (today)
-            </option>
-            {(availableDates ?? [])
-              .filter((d) => d !== today)
-              .map((d) => (
-                <option key={d} value={d} className="bg-popover text-popover-foreground">
-                  {d}
-                </option>
-              ))}
-          </select>
+            aria-label="From date"
+          />
+          <span className="text-xs text-muted-foreground">to</span>
+          <input
+            type="date"
+            value={toDate}
+            min={fromDate}
+            max={today}
+            onChange={(e) => setToDate(e.target.value)}
+            className="bg-transparent text-sm outline-none"
+            aria-label="To date"
+          />
         </div>
         <div className="flex items-center gap-2 rounded-lg border border-border bg-background/60 px-3 py-1.5 flex-1 min-w-[200px]">
           <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -215,6 +244,9 @@ function RecordsPage() {
         </div>
         <span className="ml-auto text-xs text-muted-foreground whitespace-nowrap">
           {filtered.length} record{filtered.length !== 1 ? "s" : ""}
+          {rangeTooBig && (
+            <span className="ml-2 text-amber-600">· range capped to {MAX_RANGE_DAYS} days</span>
+          )}
         </span>
       </GlassCard>
 
@@ -249,7 +281,7 @@ function RecordsPage() {
               ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="p-8 text-center text-sm text-muted-foreground">
-                    No records for {selectedDate}
+                    No records for {rangeLabel}
                   </td>
                 </tr>
               ) : (

@@ -33,7 +33,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: node-app
-          path: .
+          # Deploy only the built app + start files. server.js uses Node built-ins
+          # only, so node_modules is not needed at runtime — this avoids the huge,
+          # slow (often failing) upload of the entire node_modules tree.
+          path: |
+            dist
+            server.js
+            package.json
+            package-lock.json
 
   deploy:
     runs-on: ubuntu-latest

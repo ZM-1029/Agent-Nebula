@@ -39,6 +39,18 @@ import * as signalR from "@microsoft/signalr";
 const AGENT_STATUSES = ["Online", "Busy", "Away", "Offline"] as const;
 type AgentStatus = (typeof AGENT_STATUSES)[number];
 
+// Preset chat categories the agent picks from when resolving a chat.
+// "Other" reveals a free-text box for a manual value.
+const CHAT_TYPES = [
+  "Order status",
+  "Return",
+  "Damage",
+  "Delivery issue",
+  "Refund/Billing",
+  "Complaint",
+  "General enquiry",
+] as const;
+
 // Common emojis for the composer picker.
 const EMOJIS = [
   "😀", "😃", "😄", "😁", "😅", "😂", "🙂", "😊",
@@ -117,6 +129,11 @@ function LiveChats() {
   const [myStatus, setMyStatus] = useState<AgentStatus>("Online");
   const [accepting, setAccepting] = useState(false);
   const [customerTyping, setCustomerTyping] = useState(false);
+  // Resolve dialog: agent picks a chat category before the chat can be resolved.
+  const [resolveOpen, setResolveOpen] = useState(false);
+  const [chatTypeChoice, setChatTypeChoice] = useState<string>("");
+  const [chatTypeOther, setChatTypeOther] = useState("");
+  const [resolving, setResolving] = useState(false);
 
   const hubRef = useRef<signalR.HubConnection | null>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -484,19 +501,31 @@ function LiveChats() {
   }, [hubState, agentId, acceptSpecific]);
 
   // ── Resolve the active chat (auto-creates a ticket on the backend) ────────
-  const resolveActive = async () => {
+  // The agent must pick a chat type first; it's sent as the 4th ResolveChat arg.
+  const resolveActive = async (chatType: string) => {
     if (!activeId || !agentId) return;
+    setResolving(true);
     try {
-      await hubRef.current?.invoke(HubMethods.ResolveChat, activeId, agentId, null);
+      await hubRef.current?.invoke(HubMethods.ResolveChat, activeId, agentId, null, chatType);
       toast.success("Chat resolved — ticket created.");
+      setResolveOpen(false);
+      setChatTypeChoice("");
+      setChatTypeOther("");
       setActiveId(null);
       setMessages([]);
       setMobilePane("list");
       await fetchSessions();
     } catch {
       toast.error("Couldn't resolve the chat.");
+    } finally {
+      setResolving(false);
     }
   };
+
+  // Final chat type = the manual text when "Other" is chosen, else the preset.
+  const resolvedChatType =
+    chatTypeChoice === "Other" ? chatTypeOther.trim() : chatTypeChoice;
+  const canResolve = resolvedChatType.length > 0 && !resolving;
 
   // ── Transfer the active chat to another agent ─────────────────────────────
   const transferActive = async (newAgentId: string) => {
@@ -576,7 +605,11 @@ function LiveChats() {
               onPick={(t: string) => setDraft(t)}
               onBack={() => setMobilePane("list")}
               onProfile={() => setMobilePane("profile")}
-              onResolve={resolveActive}
+              onResolve={() => {
+                setChatTypeChoice("");
+                setChatTypeOther("");
+                setResolveOpen(true);
+              }}
               onTransfer={transferActive}
               agents={agents}
               selfId={agentId}
@@ -594,6 +627,91 @@ function LiveChats() {
           <ProfilePane session={activeSession} onBack={() => setMobilePane("chat")} />
         </div>
       </div>
+
+      {/* Resolve dialog — agent categorises the chat before it can be resolved */}
+      <AnimatePresence>
+        {resolveOpen && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => !resolving && setResolveOpen(false)}
+          >
+            <motion.div
+              className="w-full max-w-md rounded-2xl bg-background p-5 shadow-xl"
+              initial={{ scale: 0.96, y: 8 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.96, y: 8 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 className="text-base font-semibold">What type of chat was this?</h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Select a category to resolve the chat and create the ticket.
+              </p>
+
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {CHAT_TYPES.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setChatTypeChoice(t)}
+                    className={`rounded-xl border px-3 py-2 text-left text-xs font-medium transition ${
+                      chatTypeChoice === t
+                        ? "border-brand bg-brand/10 text-brand"
+                        : "border-border hover:bg-foreground/5"
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setChatTypeChoice("Other")}
+                  className={`col-span-2 rounded-xl border px-3 py-2 text-left text-xs font-medium transition ${
+                    chatTypeChoice === "Other"
+                      ? "border-brand bg-brand/10 text-brand"
+                      : "border-border hover:bg-foreground/5"
+                  }`}
+                >
+                  Other (type manually)
+                </button>
+              </div>
+
+              {chatTypeChoice === "Other" && (
+                <input
+                  autoFocus
+                  value={chatTypeOther}
+                  onChange={(e) => setChatTypeOther(e.target.value)}
+                  placeholder="Enter chat type…"
+                  maxLength={60}
+                  className="mt-2 w-full rounded-xl border border-border bg-transparent px-3 py-2 text-sm outline-none focus:border-brand"
+                />
+              )}
+
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setResolveOpen(false)}
+                  disabled={resolving}
+                  className="rounded-xl px-3 py-2 text-xs font-semibold text-muted-foreground hover:bg-foreground/5 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => resolveActive(resolvedChatType)}
+                  disabled={!canResolve}
+                  className="flex items-center gap-1.5 rounded-xl bg-brand px-3.5 py-2 text-xs font-semibold text-white transition hover:bg-brand/90 disabled:opacity-50"
+                >
+                  {resolving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                  Resolve chat
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </AppShell>
   );
 }

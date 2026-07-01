@@ -349,6 +349,16 @@ function TicketDetail() {
                 <dd className="font-medium">{t.assignedAgent?.name ?? "Unassigned"}</dd>
               </div>
               <div className="flex justify-between">
+                <dt className="text-muted-foreground">Chat type</dt>
+                <dd className="font-medium">
+                  {t.chatType ? (
+                    t.chatType
+                  ) : (
+                    <span className="text-muted-foreground">Not set</span>
+                  )}
+                </dd>
+              </div>
+              <div className="flex justify-between">
                 <dt className="text-muted-foreground">Customer rating</dt>
                 <dd className="font-medium">
                   {t.customerRating == null ? (

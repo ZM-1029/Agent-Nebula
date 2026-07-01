@@ -17,6 +17,8 @@ export interface Ticket {
   slaBreach: boolean;
   /** Customer's 1-5 star rating of the source chat, or null if not rated */
   customerRating: number | null;
+  /** Agent-selected chat category at resolve time, or null if not set */
+  chatType: string | null;
   assignedAgent: { id: string; name: string } | null;
 }
 

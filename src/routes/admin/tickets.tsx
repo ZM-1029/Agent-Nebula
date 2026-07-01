@@ -73,8 +73,18 @@ function RatingBadge({ rating }: { rating: number | null }) {
   );
 }
 
+function TypeBadge({ chatType }: { chatType: string | null }) {
+  if (!chatType) return <span className="text-muted-foreground">—</span>;
+  return (
+    <span className="inline-flex items-center rounded-full bg-accent-blue/15 px-2 py-0.5 text-[10px] font-semibold text-accent-blue">
+      {chatType}
+    </span>
+  );
+}
+
 function TicketsPage() {
   const [q, setQ] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
 
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -112,12 +122,19 @@ function TicketsPage() {
     return <Outlet />;
   }
 
-  const list = tickets.filter(
-    (t) =>
-      q === "" ||
-      t.subject.toLowerCase().includes(q.toLowerCase()) ||
-      t.id.toLowerCase().includes(q.toLowerCase()),
-  );
+  // Distinct chat types present in the current data (covers manual "Other" values too).
+  const chatTypes = Array.from(
+    new Set(tickets.map((t) => t.chatType).filter((v): v is string => !!v)),
+  ).sort();
+
+  const list = tickets
+    .filter(
+      (t) =>
+        q === "" ||
+        t.subject.toLowerCase().includes(q.toLowerCase()) ||
+        t.id.toLowerCase().includes(q.toLowerCase()),
+    )
+    .filter((t) => typeFilter === "" || t.chatType === typeFilter);
 
   return (
     <div className="space-y-4">
@@ -137,6 +154,17 @@ function TicketsPage() {
               className="h-9 pl-9 bg-background/40"
             />
           </div>
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className="h-9 rounded-md border border-border bg-background/40 px-2 text-sm outline-none"
+            aria-label="Filter by chat type"
+          >
+            <option value="">All chat types</option>
+            {chatTypes.map((ct) => (
+              <option key={ct} value={ct}>{ct}</option>
+            ))}
+          </select>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -148,6 +176,7 @@ function TicketsPage() {
                 <th className="p-3 font-medium">Assigned</th>
                 <th className="p-3 font-medium">Priority</th>
                 <th className="p-3 font-medium">Status</th>
+                <th className="p-3 font-medium">Type</th>
                 <th className="p-3 font-medium">Rating</th>
                 <th className="p-3 font-medium">Updated</th>
               </tr>
@@ -155,13 +184,13 @@ function TicketsPage() {
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={8} className="py-10 text-center text-sm text-muted-foreground">
+                  <td colSpan={9} className="py-10 text-center text-sm text-muted-foreground">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin" />
                   </td>
                 </tr>
               ) : list.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-10 text-center text-sm text-muted-foreground">
+                  <td colSpan={9} className="py-10 text-center text-sm text-muted-foreground">
                     No tickets found.
                   </td>
                 </tr>
@@ -213,6 +242,9 @@ function TicketsPage() {
                           </span>
                         )}
                       </div>
+                    </td>
+                    <td className="p-3">
+                      <TypeBadge chatType={t.chatType} />
                     </td>
                     <td className="p-3">
                       <RatingBadge rating={t.customerRating} />
